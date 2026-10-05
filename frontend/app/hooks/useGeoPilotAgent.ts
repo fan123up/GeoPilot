@@ -1,0 +1,463 @@
+// hooks/useGeoPilot.ts
+"use client";
+
+import { useRef } from "react";
+import {
+  ChatMessage,
+  GeoPilotRequest,
+} from "../models/geodatamodel";
+import { useLayerStore } from "../stores/layerStore";
+import { useChatInterfaceStore } from "../stores/chatInterfaceStore";
+import { useSettingsStore } from "../stores/settingsStore";
+import Logger from "../utils/logger";
+
+type Primitive = string | number | boolean | null | undefined;
+
+/**
+ * Recursively walk through any value and:
+ * - Convert Maps → plain objects
+ * - Convert Sets → arrays (deduped by identity)
+ * - Deduplicate Arrays
+ * - Recurse into plain Objects
+ */
+function dedupeDeep(value: any): any {
+  // Handle Maps
+  if (value instanceof Map) {
+    const obj: Record<string, any> = {};
+    for (const [k, v] of value.entries()) {
+      obj[k] = dedupeDeep(v);
+    }
+    return obj;
+  }
+
+  // Handle Sets
+  if (value instanceof Set) {
+    return Array.from(value).map(dedupeDeep);
+  }
+
+  // Handle Arrays
+  if (Array.isArray(value)) {
+    // First, recurse into each element
+    const inner = value.map(dedupeDeep);
+    // Then dedupe by identity
+    return Array.from(new Set(inner));
+  }
+
+  // Handle plain Objects
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = dedupeDeep(v);
+    }
+    return out;
+  }
+
+  // Primitives pass through
+  return value as Primitive;
+}
+
+/**
+ * Normalize a raw settings snapshot into JSON-serializable plain JS:
+ * - Maps → Objects
+ * - Sets/Arrays → deduped Arrays
+ * - Objects → fully recursed
+ */
+function normalizeSettings(raw: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const [key, val] of Object.entries(raw)) {
+    // only transform container types; primitives stay as-is
+    if (
+      val instanceof Map ||
+      val instanceof Set ||
+      Array.isArray(val) ||
+      (val !== null && typeof val === "object")
+    ) {
+      out[key] = dedupeDeep(val);
+    } else {
+      out[key] = val;
+    }
+  }
+  return out;
+}
+
+export function useGeoPilotAgent(apiUrl: string) {
+  const layerStore = useLayerStore();
+  const chatInterfaceStore = useChatInterfaceStore();
+  
+  // Refs survive React re-renders while streaming state changes.
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const currentStreamIdRef = useRef<string | null>(null);
+
+  const appendHumanMessage = (query: string) => {
+    /* // Don't normalize for now to keep all arguments
+    const normalized: ChatMessage[] = messages.map(m => ({
+      content: m.content,
+      type: m.type,
+    }));*/
+
+    const humanMsg: ChatMessage = {
+      content: query,
+      type: "human",
+    };
+
+    const currentMessages = useChatInterfaceStore.getState().messages;
+    const nextMessages = [...currentMessages, humanMsg];
+    useChatInterfaceStore.getState().setMessages(nextMessages);
+    return nextMessages;
+  };
+
+  /**
+   * Streaming version of queryGeoPilotAgent using Server-Sent Events (SSE).
+   * Provides real-time updates for tool execution and LLM token streaming.
+   */
+  async function queryGeoPilotAgentStream(
+    endpoint: "chat" = "chat",
+    options?: { portal?: string; bboxWkt?: string },
+  ) {
+    chatInterfaceStore.setLoading(true);
+    chatInterfaceStore.setIsStreaming(true);
+    chatInterfaceStore.setError("");
+    chatInterfaceStore.clearStreamingMessage();
+    chatInterfaceStore.clearToolUpdates();
+    chatInterfaceStore.clearExecutionPlan();
+    chatInterfaceStore.setGeoDataList([]);
+
+    await useSettingsStore.getState().initializeIfNeeded();
+    const rawSettings = useSettingsStore.getState().getSettings();
+    const settingsObj = normalizeSettings(rawSettings);
+    
+    // Two types of IDs:
+    // 1. User session_id (persistent): from settings, used for GeoServer layers, conversation history
+    // 2. Request stream_id (ephemeral): unique per request, used for cancellation tracking
+    
+    // session_id is preserved in settingsObj (set by backend via cookie)
+    // It's used to find preloaded GeoServer layers
+    
+    // Generate unique stream_id for this specific request (for cancellation)
+    const randomSuffix = window.crypto.getRandomValues(new Uint32Array(1))[0].toString(36).substr(2, 9);
+    const streamId = `stream_${Date.now()}_${randomSuffix}`;
+    currentStreamIdRef.current = streamId; // Used for cancellation
+    
+    // Create new AbortController for this request
+    const requestController = new AbortController();
+    abortControllerRef.current = requestController;
+
+    try {
+      const selectedLayers = useLayerStore
+        .getState()
+        .layers.filter((l) => l.selected);
+      const currentChatState = useChatInterfaceStore.getState();
+      const query = currentChatState.input;
+      // Keep the persisted transcript separate from the context the backend
+      // prepares for the model. The backend appends `query` itself, so send
+      // only the messages that existed before this turn.
+      const messagesBeforeQuery = currentChatState.messages;
+      const messagesWithHuman = appendHumanMessage(query);
+      await useChatInterfaceStore
+        .getState()
+        .saveConversationMessages(messagesWithHuman, query);
+
+      const conversationId =
+        useChatInterfaceStore.getState().activeConversationId;
+
+      const payload: GeoPilotRequest = {
+        messages: messagesBeforeQuery,
+        query,
+        conversation_id: conversationId ?? undefined,
+        geodata_last_results: currentChatState.geoDataList,
+        geodata_layers: layerStore.layers,
+        options: settingsObj, // Contains session_id for GeoServer layer lookup
+      };
+      
+      // Add stream_id for request cancellation (separate from user session_id)
+      if (payload.options) {
+        (payload.options as any).stream_id = streamId;
+      }
+
+      chatInterfaceStore.setInput("");
+      Logger.log("Streaming payload:", payload);
+
+      const response = await fetch(`${apiUrl}/chat/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        credentials: "include",
+        body: JSON.stringify(payload),
+        signal: requestController.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      if (!response.body) {
+        throw new Error("Response body is null");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          Logger.log("Stream complete");
+          break;
+        }
+
+        // Decode chunk and add to buffer
+        buffer += decoder.decode(value, { stream: true });
+
+        // Process complete SSE messages (event: ...\ndata: ...\n\n)
+        const messages = buffer.split("\n\n");
+        buffer = messages.pop() || ""; // Keep incomplete message in buffer
+
+        for (const message of messages) {
+          if (!message.trim()) continue;
+
+          const lines = message.split("\n");
+          let eventType = "";
+          let eventData = "";
+
+          for (const line of lines) {
+            if (line.startsWith("event: ")) {
+              eventType = line.substring(7).trim();
+            } else if (line.startsWith("data: ")) {
+              eventData = line.substring(6).trim();
+            }
+          }
+
+          if (!eventType || !eventData) continue;
+
+          try {
+            const data = JSON.parse(eventData);
+
+            switch (eventType) {
+              case "tool_start":
+                Logger.log(`Tool started: ${data.tool}`, data.input);
+                chatInterfaceStore.addToolUpdate({
+                  name: data.tool,
+                  status: "running",
+                  input: data.input, // Store tool input parameters
+                  plan_step: data.plan_step ?? null,
+                });
+                break;
+
+              case "tool_end":
+                Logger.log(`Tool completed: ${data.tool}`, {
+                  output: data.output,
+                  output_preview: data.output_preview,
+                  is_state_update: data.is_state_update,
+                  output_type: data.output_type,
+                });
+                chatInterfaceStore.updateToolStatus(
+                  data.tool, 
+                  "complete",
+                  undefined, // no error
+                  data.output, // full output
+                  data.output_preview, // preview
+                  data.is_state_update, // state update flag
+                  data.output_type, // output type
+                );
+                break;
+
+              case "llm_token":
+                // Append token to streaming message
+                chatInterfaceStore.appendStreamingToken(data.token);
+                break;
+
+              case "plan":
+                Logger.log("Execution plan received:", data);
+                chatInterfaceStore.setExecutionPlan(data);
+                break;
+
+              case "plan_step_update":
+                Logger.log(`Plan step ${data.step_number} → ${data.status}`, data);
+                chatInterfaceStore.updatePlanStepStatus(
+                  data.step_number,
+                  data.status,
+                  data.result_summary,
+                );
+                break;
+
+              case "result":
+                Logger.log("Final result received:", data);
+                Logger.log("Messages BEFORE setting:", chatInterfaceStore.getMessages());
+                Logger.log("GeoData BEFORE setting:", chatInterfaceStore.getGeoDataList());
+
+                // Convert serialized messages back to ChatMessage format
+                // Filter out empty AI messages (from tool calls/thoughts)
+                const resultMessages: ChatMessage[] = (data.messages ?? [])
+                  .map((msg: any) => ({
+                    type: msg.type,
+                    content: msg.content,
+                  }))
+                  .filter((msg: ChatMessage) => {
+                    // Keep all human messages
+                    if (msg.type === "human") return true;
+                    // Keep AI messages only if they have content
+                    if (msg.type === "ai") {
+                      const content = typeof msg.content === "string" ? msg.content.trim() : "";
+                      return content.length > 0;
+                    }
+                    // Keep other message types
+                    return true;
+                  });
+
+                // The backend response contains its model context, which may
+                // be summarized or pruned. It is not the canonical transcript.
+                // Append only the final assistant answer to the full history
+                // already held by the frontend instead of replacing it.
+                const finalAssistantMessage = [...resultMessages]
+                  .reverse()
+                  .find((msg) => msg.type === "ai");
+                const persistedMessages =
+                  useChatInterfaceStore.getState().messages;
+                const lastPersistedMessage =
+                  persistedMessages[persistedMessages.length - 1];
+                const alreadyAppended =
+                  finalAssistantMessage &&
+                  lastPersistedMessage?.type === "ai" &&
+                  lastPersistedMessage.content === finalAssistantMessage.content;
+                const completeConversation =
+                  finalAssistantMessage && !alreadyAppended
+                    ? [...persistedMessages, finalAssistantMessage]
+                    : persistedMessages;
+
+                Logger.log("Appending final response to conversation:", completeConversation);
+                Logger.log("Setting geodata results to:", data.geodata_results);
+
+                chatInterfaceStore.setGeoDataList(data.geodata_results);
+                chatInterfaceStore.setMessages(completeConversation);
+                await useChatInterfaceStore
+                  .getState()
+                  .saveConversationMessages(completeConversation);
+
+                if (data.geodata_layers) {
+                  layerStore.synchronizeLayersFromBackend(data.geodata_layers);
+                }
+
+                // Clear streaming UI state since we now have the final result
+                chatInterfaceStore.clearStreamingMessage();
+                chatInterfaceStore.clearToolUpdates();
+
+                // Mark any remaining in-progress plan steps as complete
+                const plan = chatInterfaceStore.getExecutionPlan();
+                if (plan) {
+                  for (const step of plan.steps) {
+                    if (step.status === "in-progress" || step.status === "pending") {
+                      chatInterfaceStore.updatePlanStepStatus(step.step_number, "complete");
+                    }
+                  }
+                }
+                
+                Logger.log("Messages AFTER setting:", chatInterfaceStore.getMessages());
+                Logger.log("GeoData AFTER setting:", chatInterfaceStore.getGeoDataList());
+                Logger.log("Loading state:", chatInterfaceStore.getLoading());
+                Logger.log("IsStreaming state:", chatInterfaceStore.getIsStreaming());
+                break;
+
+              case "error":
+                Logger.error("Streaming error:", data);
+                chatInterfaceStore.setError(
+                  data.message || "An error occurred during streaming",
+                );
+                break;
+
+              case "done":
+                Logger.log("Stream done:", data);
+                break;
+              
+              case "cancelled":
+                Logger.log("Stream cancelled:", data);
+                chatInterfaceStore.setError("Request was cancelled");
+                break;
+
+              default:
+                Logger.warn("Unknown event type:", eventType);
+            }
+          } catch (parseError) {
+            Logger.error("Failed to parse event data:", parseError);
+          }
+        }
+      }
+    } catch (e: any) {
+      // Handle abort errors gracefully
+      if (e.name === "AbortError") {
+        Logger.log("Request was aborted by user");
+        chatInterfaceStore.setError("Request was cancelled");
+      } else {
+        Logger.error("Streaming error:", e);
+        chatInterfaceStore.setError(e.message || "Something went wrong");
+      }
+    } finally {
+      Logger.log("Stream finally block - setting loading and isStreaming to false");
+      Logger.log("Messages before finally:", chatInterfaceStore.getMessages());
+      Logger.log("GeoData before finally:", chatInterfaceStore.getGeoDataList());
+      chatInterfaceStore.setLoading(false);
+      chatInterfaceStore.setIsStreaming(false);
+      if (currentStreamIdRef.current === streamId) {
+        abortControllerRef.current = null;
+        currentStreamIdRef.current = null;
+      }
+      Logger.log("Messages after finally:", chatInterfaceStore.getMessages());
+      Logger.log("GeoData after finally:", chatInterfaceStore.getGeoDataList());
+    }
+  }
+
+  /**
+   * Cancel the currently running streaming request
+   */
+  async function cancelRequest() {
+    const streamId = currentStreamIdRef.current;
+    if (!streamId) {
+      Logger.warn("No active session to cancel");
+      return;
+    }
+    
+    Logger.log(`Cancelling request for stream: ${streamId}`);
+    
+    // Abort the fetch request
+    abortControllerRef.current?.abort();
+    
+    // Notify the backend to stop processing
+    try {
+      await fetch(`${apiUrl}/chat/cancel?session_id=${encodeURIComponent(streamId)}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+      });
+      Logger.log("Backend notified of cancellation");
+    } catch (error) {
+      Logger.error("Failed to notify backend of cancellation:", error);
+      // Continue anyway - the abort should have stopped the stream
+    }
+    
+    // Clear state
+    chatInterfaceStore.setLoading(false);
+    chatInterfaceStore.setIsStreaming(false);
+    chatInterfaceStore.clearStreamingMessage();
+    chatInterfaceStore.clearToolUpdates();
+    chatInterfaceStore.clearExecutionPlan();
+    
+    // Reset references
+    if (currentStreamIdRef.current === streamId) {
+      abortControllerRef.current = null;
+      currentStreamIdRef.current = null;
+    }
+  }
+
+  return {
+    // Only return functions, not state values
+    // State should be accessed directly via useChatInterfaceStore selectors
+    // for proper reactivity in components
+    queryGeoPilotAgentStream, // Export streaming function
+    cancelRequest, // Export cancel function
+    setInput: chatInterfaceStore.setInput,
+  };
+}

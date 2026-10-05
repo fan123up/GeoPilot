@@ -1,0 +1,1247 @@
+"use client";
+
+import { useState, useEffect, useRef, useLayoutEffect } from "react";
+import {
+  Eye,
+  EyeOff,
+  Trash2,
+  Search,
+  GripVertical,
+  Palette,
+  Download,
+  Info,
+  X,
+} from "lucide-react";
+import { getApiBase } from "../../utils/apiBase";
+import Logger from "../../utils/logger";
+
+const DOWNLOAD_EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
+  "application/geo+json": ".geojson",
+  "application/json": ".json",
+  "application/zip": ".zip",
+  "application/x-zip-compressed": ".zip",
+  "application/gzip": ".gz",
+  "image/png": ".png",
+  "image/tiff": ".tif",
+};
+
+const DOWNLOAD_CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
+  ".geojson": "application/geo+json",
+  ".json": "application/json",
+  ".zip": "application/zip",
+  ".gz": "application/gzip",
+  ".png": "image/png",
+  ".tif": "image/tiff",
+  ".tiff": "image/tiff",
+};
+
+const KNOWN_DOWNLOAD_EXTENSIONS = Object.keys(DOWNLOAD_CONTENT_TYPE_BY_EXTENSION);
+
+function getLayerFileUrl(dataLink: string, apiBase: string): string {
+  return dataLink.startsWith("http") ? dataLink : `${apiBase}${dataLink}`;
+}
+
+function getExtensionFromUrl(dataLink: string): string {
+  try {
+    const pathname = new URL(dataLink, window.location.origin).pathname.toLowerCase();
+    return KNOWN_DOWNLOAD_EXTENSIONS.find((extension) => pathname.endsWith(extension)) || "";
+  } catch {
+    const pathWithoutQuery = dataLink.split(/[?#]/, 1)[0].toLowerCase();
+    return KNOWN_DOWNLOAD_EXTENSIONS.find((extension) => pathWithoutQuery.endsWith(extension)) || "";
+  }
+}
+
+function getDownloadExtension(dataLink: string, contentType?: string | null): string {
+  const urlExtension = getExtensionFromUrl(dataLink);
+  if (urlExtension) return urlExtension;
+
+  const normalizedContentType = contentType?.split(";", 1)[0].trim().toLowerCase() || "";
+  return DOWNLOAD_EXTENSION_BY_CONTENT_TYPE[normalizedContentType] || "";
+}
+
+function getDownloadFilename(layer: any, contentType?: string | null): string {
+  const extension = getDownloadExtension(layer.data_link, contentType);
+  const rawName = String(layer.name || layer.title || "layer").trim() || "layer";
+  const safeName = rawName.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_");
+  const currentExtension = KNOWN_DOWNLOAD_EXTENSIONS.find((candidate) =>
+    safeName.toLowerCase().endsWith(candidate),
+  );
+
+  if (!extension || currentExtension === extension) return safeName;
+
+  const stem = currentExtension ? safeName.slice(0, -currentExtension.length) : safeName;
+  return `${stem}${extension}`;
+}
+
+// Dynamic drag handle component - simple fixed size with responsive spacing
+// Uses 5 dot rows for visual clarity, spacing adjusts when style panel is open
+interface DragHandleProps {
+  isStylePanelOpen: boolean;
+}
+
+const DragHandle: React.FC<DragHandleProps> = ({ isStylePanelOpen }) => {
+  // Fixed number of dot rows for consistency
+  const dotRows = 5;
+  
+  return (
+    <div 
+      className={`flex flex-col items-center text-neutral-400 cursor-grab flex-shrink-0 px-1 ${isStylePanelOpen ? 'justify-around py-2' : 'justify-center py-1'} gap-0.5`}
+      style={{ 
+        minHeight: '32px',
+        alignSelf: 'stretch'
+      }}
+    >
+      {Array.from({ length: dotRows }).map((_, i) => (
+        <svg
+          key={i}
+          width="8"
+          height="6"
+          viewBox="0 0 8 6"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+          className="flex-shrink-0"
+        >
+          <circle cx="2" cy="3" r="1.5" fill="currentColor" />
+          <circle cx="6" cy="3" r="1.5" fill="currentColor" />
+        </svg>
+      ))}
+    </div>
+  );
+};
+
+// Reusable component for quick action buttons
+interface QuickActionButton {
+  label: string;
+  style: any;
+  className?: string;
+}
+
+interface QuickActionsProps {
+  layerId: string;
+  updateLayerStyle: (layerId: string, style: any) => void;
+  buttons: QuickActionButton[];
+}
+
+const QuickActionsButtons: React.FC<QuickActionsProps> = ({
+  layerId,
+  updateLayerStyle,
+  buttons,
+}) => (
+  <div className="flex flex-wrap gap-1">
+    {buttons.map((button, index) => (
+      <button
+        key={index}
+        onClick={() => updateLayerStyle(layerId, button.style)}
+        className={
+          button.className ||
+          "px-2 py-1 bg-neutral-500 text-neutral-50 text-xs rounded hover:bg-neutral-600 cursor-pointer transition-colors"
+        }
+      >
+        {button.label}
+      </button>
+    ))}
+  </div>
+);
+
+// Configuration for different quick action button sets
+const BASIC_QUICK_ACTIONS: QuickActionButton[] = [
+  { label: "虚线", style: { stroke_dash_array: "5,5" } },
+  { label: "点线", style: { stroke_dash_array: "3,3" } },
+  { label: "实线", style: { stroke_dash_array: undefined } },
+  { label: "大号点", style: { radius: 12, stroke_weight: 3 } },
+];
+
+const ADVANCED_QUICK_ACTIONS: QuickActionButton[] = [
+  {
+    label: "粗虚线",
+    style: {
+      stroke_color: "#ff0000",
+      stroke_weight: 4,
+      stroke_dash_array: "10,5",
+      fill_opacity: 0.1,
+    },
+    className:
+      "px-2 py-1 bg-corporate-1-500 text-neutral-50 text-xs rounded hover:bg-corporate-1-600 cursor-pointer transition-colors",
+  },
+  {
+    label: "浅蓝",
+    style: {
+      stroke_color: "#0066cc",
+      stroke_weight: 1,
+      stroke_opacity: 0.8,
+      fill_color: "#0066cc",
+      fill_opacity: 0.15,
+    },
+    className:
+      "px-2 py-1 bg-corporate-2-500 text-neutral-50 text-xs rounded hover:bg-corporate-2-600 cursor-pointer transition-colors",
+  },
+  {
+    label: "绿色轮廓",
+    style: {
+      stroke_color: "#00aa00",
+      stroke_weight: 3,
+      stroke_opacity: 1.0,
+      stroke_dash_array: "3,3,10,3",
+      fill_opacity: 0.0,
+    },
+    className:
+      "px-2 py-1 bg-corporate-2-500 text-neutral-50 text-xs rounded hover:bg-corporate-2-600 cursor-pointer transition-colors",
+  },
+  {
+    label: "高亮点",
+    style: {
+      stroke_color: "#ff6600",
+      stroke_weight: 2,
+      radius: 15,
+      fill_color: "#ffaa00",
+      fill_opacity: 0.6,
+    },
+    className:
+      "px-2 py-1 bg-warning-500 text-neutral-50 text-xs rounded hover:bg-warning-600 cursor-pointer transition-colors",
+  },
+];
+
+const SECONDARY_QUICK_ACTIONS: QuickActionButton[] = [
+  { label: "轻柔", style: { stroke_weight: 1, fill_opacity: 0.1 } },
+  { label: "醒目", style: { stroke_weight: 4, stroke_opacity: 1.0 } },
+];
+
+interface LayerListProps {
+  layers: any[];
+  toggleLayerVisibility: (layerId: string) => void;
+  removeLayer: (layerId: string) => void;
+  reorderLayers: (fromIndex: number, toIndex: number) => void;
+  updateLayerStyle: (layerId: string, style: any) => void;
+  setZoomTo: (layerId: string) => void;
+}
+
+export default function LayerList({
+  layers,
+  toggleLayerVisibility,
+  removeLayer,
+  reorderLayers,
+  updateLayerStyle,
+  setZoomTo,
+}: LayerListProps) {
+  const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
+  const [dropTargetIdx, setDropTargetIdx] = useState<number | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [recentlyMovedId, setRecentlyMovedId] = useState<string | null>(null);
+  const [stylePanelOpen, setStylePanelOpen] = useState<string | null>(null);
+  const [activeMetadataId, setActiveMetadataId] = useState<string | null>(null);
+  const [popupPosition, setPopupPosition] = useState<{ top: number; left: number } | null>(null);
+  const infoButtonRefs = useRef<{ [key: string]: HTMLButtonElement | null }>({});
+  const popupRef = useRef<HTMLDivElement | null>(null);
+
+  // Adjust popup position after render to ensure it stays in viewport
+  useLayoutEffect(() => {
+    if (popupRef.current && popupPosition) {
+      const popup = popupRef.current;
+      const rect = popup.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      
+      let { top, left } = popupPosition;
+      let adjusted = false;
+      
+      // Check if popup overflows right edge
+      if (rect.right > viewportWidth - 8) {
+        left = Math.max(8, viewportWidth - rect.width - 8);
+        adjusted = true;
+      }
+      
+      // Check if popup overflows bottom edge
+      if (rect.bottom > viewportHeight - 8) {
+        top = Math.max(8, viewportHeight - rect.height - 8);
+        adjusted = true;
+      }
+      
+      // Check if popup overflows top edge
+      if (top < 8) {
+        top = 8;
+        adjusted = true;
+      }
+      
+      // Check if popup overflows left edge
+      if (left < 8) {
+        left = 8;
+        adjusted = true;
+      }
+      
+      // Update position if adjustments were needed
+      if (adjusted) {
+        setPopupPosition({ top, left });
+      }
+    }
+  }, [activeMetadataId, popupPosition]);
+
+  // Download vector and binary layers without assuming a GeoJSON response.
+  const downloadLayer = async (layer: any) => {
+    try {
+      const apiBase = getApiBase();
+      const response = await fetch(getLayerFileUrl(layer.data_link, apiBase));
+      
+      if (!response.ok) {
+        throw new Error(`Failed to download layer: ${response.statusText}`);
+      }
+      
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = getDownloadFilename(layer, response.headers.get("content-type"));
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      Logger.log(`Downloaded layer: ${layer.name}`);
+    } catch (error) {
+      Logger.error(`Error downloading layer ${layer.name}:`, error);
+      alert(`Failed to download layer: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
+  // Handle drag start for download button - enables dragging to desktop/other apps
+  const handleDownloadDragStart = (e: React.DragEvent, layer: any) => {
+    try {
+      const apiBase = getApiBase();
+      const fileUrl = new URL(
+        getLayerFileUrl(layer.data_link, apiBase),
+        window.location.origin,
+      ).toString();
+      const extension = getDownloadExtension(layer.data_link);
+      const contentType = DOWNLOAD_CONTENT_TYPE_BY_EXTENSION[extension] || "application/octet-stream";
+      const fileName = getDownloadFilename(layer);
+
+      e.dataTransfer.effectAllowed = 'copy';
+      e.dataTransfer.setData('DownloadURL', `${contentType}:${fileName}:${fileUrl}`);
+      e.dataTransfer.setData('text/uri-list', fileUrl);
+      e.dataTransfer.setData('text/plain', fileUrl);
+      
+      Logger.log(`Started dragging layer: ${layer.name}`);
+    } catch (error) {
+      Logger.error(`Error preparing layer ${layer.name} for drag:`, error);
+      e.preventDefault(); // Cancel drag if there's an error
+    }
+  };
+
+  // Clear the recently moved highlight after animation completes
+  useEffect(() => {
+    if (recentlyMovedId) {
+      const timer = setTimeout(() => {
+        setRecentlyMovedId(null);
+      }, 1000); // Match this with the CSS animation duration
+
+      return () => clearTimeout(timer);
+    }
+  }, [recentlyMovedId]);
+
+  return (
+    <div className="mb-4">
+      <h3 className="font-semibold mb-2">当前图层</h3>
+      {layers.length === 0 ? (
+        <p className="text-sm text-gray-500">暂未添加图层。</p>
+      ) : (
+        <ul
+          className={`space-y-2 text-sm ${isDragging ? "cursor-grabbing" : ""}`}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={() => {
+            // Reset all drag and drop state on any drop within container
+            setDraggedIdx(null);
+            setDropTargetIdx(null);
+            setIsDragging(false);
+          }}
+        >
+          {[...layers]
+            .slice()
+            .reverse()
+            .map((layer, idx, arr) => {
+              const isBeingDragged = draggedIdx === idx;
+              const isDropTarget = dropTargetIdx === idx;
+              const isRecentlyMoved = recentlyMovedId === layer.id;
+
+              // Determine if we're moving the layer upward or downward in the layer stack
+              // If draggedIdx > dropTargetIdx, we're moving a layer up in the display (which is down in the actual stack)
+              // If draggedIdx < dropTargetIdx, we're moving a layer down in the display (which is up in the actual stack)
+              const isMovingUp =
+                draggedIdx !== null &&
+                dropTargetIdx !== null &&
+                draggedIdx > dropTargetIdx;
+
+              // Show indicator above for top item OR when moving a layer upward
+              const showIndicatorAbove = idx === 0 || isMovingUp;
+
+              return (
+                <li
+                  key={layer.id}
+                  className={`relative transition-all duration-200 ${
+                    isDropTarget
+                      ? showIndicatorAbove
+                        ? "mt-8"
+                        : "mb-8"
+                      : "mb-2"
+                  } ${isBeingDragged ? "opacity-50 z-10" : "opacity-100"}`}
+                  onDragOver={(e) => {
+                    // This prevents the default behavior which would prevent drop
+                    e.preventDefault();
+                  }}
+                >
+                  {/* Drop indicator - showing ABOVE when appropriate */}
+                  {isDropTarget && showIndicatorAbove && (
+                    <div
+                      className="absolute w-full h-4 -top-4 flex items-center justify-center"
+                      style={{ pointerEvents: "none" }}
+                    >
+                      <div className="h-1.5 bg-info-600 w-full rounded-full animate-pulse"></div>
+                    </div>
+                  )}
+
+                  <div
+                    className={`bg-neutral-50 rounded shadow transition-all ${
+                      isDropTarget ? "border-2 border-info-400" : ""
+                    } ${isRecentlyMoved ? "highlight-animation" : ""}`}
+                    draggable
+                    onDragStart={(e) => {
+                      setDraggedIdx(idx);
+                      setDropTargetIdx(null);
+                      setIsDragging(true);
+
+                      // Set drag ghost image if supported
+                      if (e.dataTransfer.setDragImage) {
+                        const ghostElement = document.createElement("div");
+                        ghostElement.style.width = "200px";
+                        ghostElement.style.padding = "8px";
+                        ghostElement.style.borderRadius = "4px";
+                        ghostElement.style.backgroundColor =
+                          "rgba(59, 130, 246, 0.2)";
+                        ghostElement.style.border =
+                          "1px solid rgba(59, 130, 246, 0.5)";
+                        ghostElement.style.color = "#1e40af";
+                        ghostElement.style.fontWeight = "bold";
+                        ghostElement.innerText = layer.title || layer.name;
+                        document.body.appendChild(ghostElement);
+                        e.dataTransfer.setDragImage(ghostElement, 100, 20);
+
+                        // Clean up ghost element after it's been used
+                        setTimeout(() => {
+                          document.body.removeChild(ghostElement);
+                        }, 0);
+                      }
+                    }}
+                    onDragEnd={() => {
+                      setIsDragging(false);
+                      setDraggedIdx(null);
+                      setDropTargetIdx(null);
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      if (draggedIdx !== idx && dropTargetIdx !== idx) {
+                        setDropTargetIdx(idx);
+                      }
+                    }}
+                    onDragEnter={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (draggedIdx !== idx) {
+                        setDropTargetIdx(idx);
+                      }
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+
+                      // Check if we're leaving the element and not entering a child
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const x = e.clientX;
+                      const y = e.clientY;
+
+                      if (
+                        x < rect.left ||
+                        x >= rect.right ||
+                        y < rect.top ||
+                        y >= rect.bottom
+                      ) {
+                        if (dropTargetIdx === idx) {
+                          setDropTargetIdx(null);
+                        }
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+
+                      if (draggedIdx === null || draggedIdx === idx) return;
+
+                      // arr is reversed, so we need to map back to the original index
+                      const from = layers.length - 1 - draggedIdx;
+                      const to = layers.length - 1 - idx;
+                      reorderLayers(from, to);
+
+                      // Mark the moved layer for highlight animation
+                      const movedLayerId = arr[draggedIdx].id;
+                      setRecentlyMovedId(movedLayerId);
+
+                      // Reset drag state
+                      setIsDragging(false);
+                      setDraggedIdx(null);
+                      setDropTargetIdx(null);
+                    }}
+                    style={{
+                      cursor: isDragging ? "grabbing" : "grab",
+                    }}
+                    title="拖动调整顺序"
+                  >
+                    <div className="flex p-2 gap-2">
+                      {/* Drag handle - dynamically fills height with dots */}
+                      <DragHandle isStylePanelOpen={stylePanelOpen === layer.id} />
+                      
+                      {/* Content area - title and icons */}
+                      <div className="flex-1 min-w-0 flex flex-col gap-2 relative">
+                        {/* Title row with info icon */}
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="flex-1 min-w-0 font-bold text-neutral-800 whitespace-normal break-words">
+                            {layer.title || layer.name}
+                          </div>
+                          <button
+                            ref={(el) => { infoButtonRefs.current[layer.id] = el; }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const newActiveId = activeMetadataId === layer.id ? null : layer.id;
+                              setActiveMetadataId(newActiveId);
+                              
+                              if (newActiveId && infoButtonRefs.current[layer.id]) {
+                                const rect = infoButtonRefs.current[layer.id]!.getBoundingClientRect();
+                                const viewportHeight = window.innerHeight;
+                                const viewportWidth = window.innerWidth;
+                                const popupWidth = 400; // max-w-[400px]
+                                
+                                // Calculate initial position
+                                let top = rect.bottom + 4;
+                                let left = rect.left;
+                                
+                                // Adjust horizontal position if popup would overflow right edge
+                                if (left + popupWidth > viewportWidth) {
+                                  left = Math.max(8, viewportWidth - popupWidth - 8);
+                                }
+                                
+                                // Adjust vertical position if popup would overflow bottom
+                                // Reserve some space (estimate ~300px for popup, but will be constrained by max-height)
+                                if (top + 300 > viewportHeight) {
+                                  // Try positioning above the button instead
+                                  const topAbove = rect.top - 300 - 4;
+                                  if (topAbove > 8) {
+                                    top = topAbove;
+                                  } else {
+                                    // If neither works well, position near top with some margin
+                                    top = 8;
+                                  }
+                                }
+                                
+                                setPopupPosition({
+                                  top,
+                                  left
+                                });
+                              }
+                            }}
+                            title="查看图层信息"
+                            className="text-neutral-500 hover:text-info-600 p-1 hover:bg-neutral-100 rounded transition-colors cursor-pointer flex-shrink-0"
+                          >
+                            <Info size={16} />
+                          </button>
+                        </div>
+                        
+                        {/* Action icons row - centered, wraps to single row on wide panels */}
+                        <div className="flex items-center justify-center gap-2 flex-wrap">
+                          <button
+                            onClick={() => setZoomTo(layer.id)}
+                            title="缩放至该图层"
+                            className="text-neutral-600 hover:text-info-600 p-1 hover:bg-neutral-100 rounded transition-colors cursor-pointer"
+                          >
+                            <Search size={16} />
+                          </button>
+                          <button
+                            onClick={() => toggleLayerVisibility(layer.id)}
+                            title="切换图层显隐"
+                            className="text-neutral-600 hover:text-info-600 p-1 hover:bg-neutral-100 rounded transition-colors cursor-pointer"
+                          >
+                            {layer.visible ? (
+                              <Eye size={16} />
+                            ) : (
+                              <EyeOff size={16} />
+                            )}
+                          </button>
+                          <button
+                            onClick={() =>
+                              setStylePanelOpen(
+                                stylePanelOpen === layer.id ? null : layer.id,
+                              )
+                            }
+                            title="设置图层样式"
+                            className={`p-1 rounded transition-colors cursor-pointer ${stylePanelOpen === layer.id ? "text-info-600 bg-info-100" : "text-neutral-600 hover:text-info-600 hover:bg-neutral-100"}`}
+                          >
+                            <Palette size={16} />
+                          </button>
+                          <button
+                            onClick={() => downloadLayer(layer)}
+                            draggable="true"
+                            onDragStart={(e) => handleDownloadDragStart(e, layer)}
+                            title="下载图层（单击或拖动到桌面）"
+                            className="text-neutral-600 hover:text-success-600 p-1 hover:bg-neutral-100 rounded transition-colors cursor-grab active:cursor-grabbing"
+                          >
+                            <Download size={16} />
+                          </button>
+                          <button
+                            onClick={() => removeLayer(layer.id)}
+                            title="移除图层"
+                            className="text-danger-500 hover:text-danger-700 p-1 hover:bg-danger-50 rounded transition-colors cursor-pointer"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Style Panel */}
+                  {stylePanelOpen === layer.id && (
+                    <div className="mt-2 p-3 bg-neutral-50 rounded border-l-4 border-info-400">
+                      <h4 className="font-semibold text-sm mb-2">
+                        样式设置
+                      </h4>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        {/* Stroke Color */}
+                        <div>
+                          <label className="block text-neutral-700">
+                            边线颜色
+                          </label>
+                          <input
+                            type="color"
+                            value={layer.style?.stroke_color || "#3388ff"}
+                            onChange={(e) =>
+                              updateLayerStyle(layer.id, {
+                                stroke_color: e.target.value,
+                              })
+                            }
+                            className="w-full h-6 rounded border"
+                          />
+                        </div>
+
+                        {/* Stroke Weight */}
+                        <div>
+                          <label className="block text-gray-700">
+                            边线宽度
+                          </label>
+                          <input
+                            type="range"
+                            min="1"
+                            max="10"
+                            value={layer.style?.stroke_weight || 2}
+                            onChange={(e) =>
+                              updateLayerStyle(layer.id, {
+                                stroke_weight: parseInt(e.target.value),
+                              })
+                            }
+                            className="w-full"
+                          />
+                          <span className="text-gray-500">
+                            {layer.style?.stroke_weight || 2}px
+                          </span>
+                        </div>
+
+                        {/* Stroke Opacity */}
+                        <div>
+                          <label className="block text-gray-700">
+                            边线透明度
+                          </label>
+                          <input
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.1"
+                            value={layer.style?.stroke_opacity || 1.0}
+                            onChange={(e) =>
+                              updateLayerStyle(layer.id, {
+                                stroke_opacity: parseFloat(e.target.value),
+                              })
+                            }
+                            className="w-full"
+                          />
+                          <span className="text-gray-500">
+                            {Math.round(
+                              (layer.style?.stroke_opacity || 1.0) * 100,
+                            )}
+                            %
+                          </span>
+                        </div>
+
+                        {/* Dash Array */}
+                        <div>
+                          <label className="block text-gray-700">
+                            线型
+                          </label>
+                          <select
+                            value={layer.style?.stroke_dash_array || ""}
+                            onChange={(e) =>
+                              updateLayerStyle(layer.id, {
+                                stroke_dash_array: e.target.value || undefined,
+                              })
+                            }
+                            className="w-full border rounded px-2 py-1"
+                          >
+                            <option value="">实线</option>
+                            <option value="5,5">虚线（5,5）</option>
+                            <option value="10,5">长虚线（10,5）</option>
+                            <option value="3,3">点线（3,3）</option>
+                            <option value="10,5,5,5">
+                              点划线（10,5,5,5）
+                            </option>
+                            <option value="15,5,5,5,5,5">
+                              长点划线（15,5,5,5,5,5）
+                            </option>
+                          </select>
+                        </div>
+
+                        {/* Dash Offset */}
+                        {layer.style?.stroke_dash_array && (
+                          <div>
+                            <label className="block text-gray-700">
+                              虚线偏移
+                            </label>
+                            <input
+                              type="range"
+                              min="0"
+                              max="20"
+                              value={layer.style?.stroke_dash_offset || 0}
+                              onChange={(e) =>
+                                updateLayerStyle(layer.id, {
+                                  stroke_dash_offset: parseFloat(
+                                    e.target.value,
+                                  ),
+                                })
+                              }
+                              className="w-full"
+                            />
+                            <span className="text-gray-500">
+                              {layer.style?.stroke_dash_offset || 0}px
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Fill Color */}
+                        <div>
+                          <label className="block text-gray-700">
+                            填充颜色
+                          </label>
+                          <input
+                            type="color"
+                            value={layer.style?.fill_color || "#3388ff"}
+                            onChange={(e) =>
+                              updateLayerStyle(layer.id, {
+                                fill_color: e.target.value,
+                              })
+                            }
+                            className="w-full h-6 rounded border"
+                          />
+                        </div>
+
+                        {/* Fill Opacity */}
+                        <div>
+                          <label className="block text-gray-700">
+                            填充透明度
+                          </label>
+                          <input
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.1"
+                            value={layer.style?.fill_opacity || 0.3}
+                            onChange={(e) =>
+                              updateLayerStyle(layer.id, {
+                                fill_opacity: parseFloat(e.target.value),
+                              })
+                            }
+                            className="w-full"
+                          />
+                          <span className="text-gray-500">
+                            {Math.round(
+                              (layer.style?.fill_opacity || 0.3) * 100,
+                            )}
+                            %
+                          </span>
+                        </div>
+
+                        {/* Circle Radius (for point data) */}
+                        <div>
+                          <label className="block text-gray-700">
+                            点半径
+                          </label>
+                          <input
+                            type="range"
+                            min="1"
+                            max="20"
+                            value={layer.style?.radius || 6}
+                            onChange={(e) =>
+                              updateLayerStyle(layer.id, {
+                                radius: parseInt(e.target.value),
+                              })
+                            }
+                            className="w-full"
+                          />
+                          <span className="text-gray-500">
+                            {layer.style?.radius || 6}px
+                          </span>
+                        </div>
+
+                        {/* Line Cap Style */}
+                        <div>
+                          <label className="block text-gray-700">
+                            线帽样式
+                          </label>
+                          <select
+                            value={layer.style?.line_cap || "round"}
+                            onChange={(e) =>
+                              updateLayerStyle(layer.id, {
+                                line_cap: e.target.value,
+                              })
+                            }
+                            className="w-full border rounded px-2 py-1"
+                          >
+                            <option value="round">圆形</option>
+                            <option value="square">方形</option>
+                            <option value="butt">平直</option>
+                          </select>
+                        </div>
+
+                        {/* Line Join Style */}
+                        <div>
+                          <label className="block text-gray-700">
+                            连接样式
+                          </label>
+                          <select
+                            value={layer.style?.line_join || "round"}
+                            onChange={(e) =>
+                              updateLayerStyle(layer.id, {
+                                line_join: e.target.value,
+                              })
+                            }
+                            className="w-full border rounded px-2 py-1"
+                          >
+                            <option value="round">圆角</option>
+                            <option value="bevel">斜角</option>
+                            <option value="miter">尖角</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Advanced styling section */}
+                      <div className="mt-3 pt-3 border-t border-gray-200">
+                        <h4 className="text-xs font-semibold text-gray-600 mb-2">
+                          高级效果
+                        </h4>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          {/* Shadow Color */}
+                          <div>
+                            <label className="block text-gray-700">
+                              阴影颜色
+                            </label>
+                            <input
+                              type="color"
+                              value={layer.style?.shadow_color || "#000000"}
+                              onChange={(e) =>
+                                updateLayerStyle(layer.id, {
+                                  shadow_color: e.target.value,
+                                  shadow_offset_x:
+                                    layer.style?.shadow_offset_x || 2,
+                                  shadow_offset_y:
+                                    layer.style?.shadow_offset_y || 2,
+                                  shadow_blur: layer.style?.shadow_blur || 4,
+                                })
+                              }
+                              className="w-full h-6 rounded border"
+                            />
+                          </div>
+
+                          {/* Shadow Blur */}
+                          <div>
+                            <label className="block text-gray-700">
+                              阴影模糊
+                            </label>
+                            <input
+                              type="range"
+                              min="0"
+                              max="10"
+                              value={layer.style?.shadow_blur || 0}
+                              onChange={(e) =>
+                                updateLayerStyle(layer.id, {
+                                  shadow_blur: parseFloat(e.target.value),
+                                })
+                              }
+                              className="w-full"
+                            />
+                            <span className="text-gray-500">
+                              {layer.style?.shadow_blur || 0}px
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Preset buttons */}
+                      <div className="mt-3">
+                        <h4 className="text-xs font-semibold text-neutral-600 mb-2">
+                          快速配色
+                        </h4>
+                        <div className="flex flex-wrap gap-1 mb-2">
+                          <button
+                            onClick={() =>
+                              updateLayerStyle(layer.id, {
+                                stroke_color: "#ff0000",
+                                fill_color: "#ff0000",
+                                fill_opacity: 0.2,
+                              })
+                            }
+                            className="px-2 py-1 bg-danger-500 text-neutral-50 text-xs rounded hover:bg-danger-600 cursor-pointer transition-colors"
+                          >
+                            红色
+                          </button>
+                          <button
+                            onClick={() =>
+                              updateLayerStyle(layer.id, {
+                                stroke_color: "#00ff00",
+                                fill_color: "#00ff00",
+                                fill_opacity: 0.2,
+                              })
+                            }
+                            className="px-2 py-1 bg-corporate-2-500 text-neutral-50 text-xs rounded hover:bg-corporate-2-600 cursor-pointer transition-colors"
+                          >
+                            绿色
+                          </button>
+                          <button
+                            onClick={() =>
+                              updateLayerStyle(layer.id, {
+                                stroke_color: "#0000ff",
+                                fill_color: "#0000ff",
+                                fill_opacity: 0.2,
+                              })
+                            }
+                            className="px-2 py-1 bg-info-600 text-neutral-50 text-xs rounded hover:bg-info-700 cursor-pointer transition-colors"
+                          >
+                            蓝色
+                          </button>
+                          <button
+                            onClick={() =>
+                              updateLayerStyle(layer.id, {
+                                stroke_color: "#ffff00",
+                                fill_color: "#ffff00",
+                                fill_opacity: 0.2,
+                              })
+                            }
+                            className="px-2 py-1 bg-warning-500 text-neutral-50 text-xs rounded hover:bg-warning-600 cursor-pointer transition-colors"
+                          >
+                            黄色
+                          </button>
+                          <button
+                            onClick={() =>
+                              updateLayerStyle(layer.id, {
+                                stroke_color: "#800080",
+                                fill_color: "#800080",
+                                fill_opacity: 0.2,
+                              })
+                            }
+                            className="px-2 py-1 bg-corporate-3-500 text-neutral-50 text-xs rounded hover:bg-corporate-3-600 cursor-pointer transition-colors"
+                          >
+                            紫色
+                          </button>
+                          <button
+                            onClick={() =>
+                              updateLayerStyle(layer.id, {
+                                stroke_color: "#ffa500",
+                                fill_color: "#ffa500",
+                                fill_opacity: 0.2,
+                              })
+                            }
+                            className="px-2 py-1 bg-warning-500 text-neutral-50 text-xs rounded hover:bg-warning-600 cursor-pointer transition-colors"
+                          >
+                            橙色
+                          </button>
+                        </div>
+                        <QuickActionsButtons
+                          layerId={layer.id}
+                          updateLayerStyle={updateLayerStyle}
+                          buttons={BASIC_QUICK_ACTIONS}
+                        />
+
+                        {/* Advanced Styling Presets */}
+                        <div className="mt-2">
+                          <QuickActionsButtons
+                            layerId={layer.id}
+                            updateLayerStyle={updateLayerStyle}
+                            buttons={ADVANCED_QUICK_ACTIONS}
+                          />
+                        </div>
+
+                        {/* Geometry-specific quick actions */}
+                        <div className="mt-2">
+                          <h4 className="text-xs font-semibold text-neutral-600 mb-1">
+                            快速操作
+                          </h4>
+                          <QuickActionsButtons
+                            layerId={layer.id}
+                            updateLayerStyle={updateLayerStyle}
+                            buttons={[
+                              ...BASIC_QUICK_ACTIONS,
+                              ...SECONDARY_QUICK_ACTIONS,
+                            ]}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Drop indicator - showing BELOW when appropriate */}
+                  {isDropTarget && !showIndicatorAbove && (
+                    <div
+                      className="absolute w-full h-4 -bottom-4 flex items-center justify-center"
+                      style={{ pointerEvents: "none" }}
+                    >
+                      <div className="h-1.5 bg-info-600 w-full rounded-full animate-pulse"></div>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+        </ul>
+      )}
+
+      {/* Metadata popup - fixed positioning to overflow sidebar */}
+      {activeMetadataId && popupPosition && (() => {
+        const layer = layers.find(l => l.id === activeMetadataId);
+        if (!layer) return null;
+        
+        return (
+          <div 
+            ref={popupRef}
+            className="fixed bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 rounded-lg shadow-xl p-3 text-sm z-[100] min-w-[300px] max-w-[400px] overflow-y-auto"
+            style={{
+              top: `${popupPosition.top}px`,
+              left: `${popupPosition.left}px`,
+              maxHeight: 'calc(80vh - 16px)', // 80% of viewport height minus some margin
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close button */}
+            <button
+              onClick={() => setActiveMetadataId(null)}
+              className="absolute top-2 right-2 text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200"
+              aria-label="关闭图层信息"
+            >
+              <X size={16} />
+            </button>
+            
+            <div className="space-y-2">
+              <div>
+                <span className="font-semibold text-neutral-700 dark:text-neutral-200">名称：</span>
+                <p className="text-neutral-900 dark:text-neutral-100 break-words">{layer.title || layer.name}</p>
+              </div>
+              {layer.data_type && (
+                <div>
+                  <span className="font-semibold text-neutral-700 dark:text-neutral-200">数据类型：</span>
+                  <p className="text-neutral-900 dark:text-neutral-100">{layer.data_type}</p>
+                </div>
+              )}
+              {layer.layer_type && (
+                <div>
+                  <span className="font-semibold text-neutral-700 dark:text-neutral-200">图层类型：</span>
+                  <p className="text-neutral-900 dark:text-neutral-100">{layer.layer_type}</p>
+                </div>
+              )}
+              {layer.format && (
+                <div>
+                  <span className="font-semibold text-neutral-700 dark:text-neutral-200">格式：</span>
+                  <p className="text-neutral-900 dark:text-neutral-100">{layer.format}</p>
+                </div>
+              )}
+              {layer.data_source && (
+                <div>
+                  <span className="font-semibold text-neutral-700 dark:text-neutral-200">来源：</span>
+                  <p className="text-neutral-900 dark:text-neutral-100 break-all text-xs">{layer.data_source}</p>
+                </div>
+              )}
+              {layer.bounding_box && (
+                <div>
+                  <span className="font-semibold text-neutral-700 dark:text-neutral-200">空间范围：</span>
+                  <p className="text-neutral-900 dark:text-neutral-100 text-xs font-mono">
+                    [{Array.isArray(layer.bounding_box) 
+                      ? layer.bounding_box.join(', ')
+                      : JSON.stringify(layer.bounding_box)
+                    }]
+                  </p>
+                </div>
+              )}
+              
+              {/* Processing Metadata Section */}
+              {layer.processing_metadata && (
+                <div className="pt-3 mt-3 border-t border-neutral-200 dark:border-neutral-600">
+                  <h4 className="font-semibold text-neutral-700 dark:text-neutral-200 mb-2">处理信息</h4>
+                  
+                  {/* Source Layers - Prominently displayed */}
+                  {layer.processing_metadata.origin_layers && 
+                   layer.processing_metadata.origin_layers.length > 0 && (
+                    <div className="mb-3 p-2 bg-secondary-50 dark:bg-secondary-900 rounded border border-secondary-300 dark:border-secondary-600">
+                      <span className="font-semibold text-secondary-900 dark:text-secondary-100 text-xs tracking-wide">来源图层</span>
+                      <p className="text-sm text-neutral-900 dark:text-neutral-100 mt-1">
+                        {layer.processing_metadata.origin_layers.join(', ')}
+                      </p>
+                    </div>
+                  )}
+                  
+                  {/* Operation Summary */}
+                  <div className="mb-3 p-2 bg-info-50 dark:bg-info-900 rounded border border-info-200 dark:border-info-700">
+                    <p className="text-sm text-neutral-900 dark:text-neutral-100">
+                      <strong className="text-info-800 dark:text-info-200">
+                        {layer.processing_metadata.operation.charAt(0).toUpperCase() + 
+                         layer.processing_metadata.operation.slice(1)}
+                      </strong> operation
+                      {layer.processing_metadata.operation === 'buffer' && 
+                       layer.description?.match(/\d+\.?\d*\s*(m|km|meters|kilometers)/i) && 
+                       ` with ${layer.description.match(/\d+\.?\d*\s*(m|km|meters|kilometers)/i)![0]}`}
+                      {' using '}
+                      <strong className="text-info-800 dark:text-info-200">{layer.processing_metadata.crs_used}</strong>
+                      {layer.processing_metadata.auto_selected && ' 🎯'}
+                    </p>
+                  </div>
+                  
+                  {/* CRS Details */}
+                  <div className="space-y-1">
+                    <div>
+                      <span className="font-semibold text-neutral-700 dark:text-neutral-200">坐标参考系：</span>
+                      <p className="text-neutral-900 dark:text-neutral-100 text-sm">{layer.processing_metadata.crs_name}</p>
+                    </div>
+                    <div>
+                      <span className="font-semibold text-neutral-700 dark:text-neutral-200">投影属性：</span>
+                      <p className="text-neutral-900 dark:text-neutral-100 text-sm capitalize">
+                        {layer.processing_metadata.projection_property}
+                      </p>
+                    </div>
+                    {layer.processing_metadata.auto_selected && (
+                      <div>
+                        <span className="font-semibold text-neutral-700 dark:text-neutral-200">自动选择：</span>
+                        <p className="text-neutral-900 dark:text-neutral-100 text-sm">
+                          是 {layer.processing_metadata.selection_reason && 
+                               `- ${layer.processing_metadata.selection_reason}`}
+                        </p>
+                      </div>
+                    )}
+                    {layer.processing_metadata.expected_error !== undefined && (
+                      <div>
+                        <span className="font-semibold text-neutral-700 dark:text-neutral-200">预期误差：</span>
+                        <p className="text-neutral-900 dark:text-neutral-100 text-sm">
+                          &lt;{layer.processing_metadata.expected_error}%
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Query Construction Section (for geocoding results) */}
+              {layer.processing_metadata?.query_intent && (
+                <div className="pt-3 mt-3 border-t border-neutral-200 dark:border-neutral-600">
+                  <h4 className="font-semibold text-neutral-700 dark:text-neutral-200 mb-2">
+                    Query Construction
+                  </h4>
+
+                  {/* Search intent */}
+                  <div className="mb-3 p-2 bg-blue-50 dark:bg-blue-900/20 rounded border border-blue-200 dark:border-blue-800">
+                    <span className="text-xs font-semibold text-blue-800 dark:text-blue-300">
+                      Search Intent
+                    </span>
+                    <p className="text-sm text-neutral-900 dark:text-neutral-100 mt-1">
+                      &quot;{layer.processing_metadata.query_intent}&quot;
+                      {layer.processing_metadata.query_location && (
+                        <> in {layer.processing_metadata.query_location}</>
+                      )}
+                    </p>
+                  </div>
+
+                  {/* Resolution method */}
+                  {layer.processing_metadata.resolution_detail && (
+                    <div className="mb-2">
+                      <span className="font-semibold text-neutral-700 dark:text-neutral-300 text-xs">
+                        Resolution:
+                      </span>
+                      <p className="text-sm text-neutral-900 dark:text-neutral-100">
+                        {layer.processing_metadata.resolution_detail}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Tags used */}
+                  {layer.processing_metadata.osm_tags_used &&
+                    layer.processing_metadata.osm_tags_used.length > 0 && (
+                      <div className="mb-2">
+                        <span className="font-semibold text-neutral-700 dark:text-neutral-300 text-xs">
+                          OSM Tags ({layer.processing_metadata.osm_tags_used.length}):
+                        </span>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {layer.processing_metadata.osm_tags_used.map((tag: string) => (
+                            <span
+                              key={tag}
+                              className="px-1.5 py-0.5 bg-neutral-200 dark:bg-neutral-700 text-neutral-800 dark:text-neutral-200 rounded text-xs font-mono"
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                  {/* Excluded tags (if any) */}
+                  {layer.processing_metadata.osm_tags_excluded &&
+                    layer.processing_metadata.osm_tags_excluded.length > 0 && (
+                      <div className="mb-2">
+                        <span className="font-semibold text-neutral-700 dark:text-neutral-300 text-xs">
+                          Excluded:
+                        </span>
+                        {layer.processing_metadata.osm_tags_excluded.map(
+                          (e: { tag: string; reason: string }) => (
+                            <p key={e.tag} className="text-xs text-neutral-600 dark:text-neutral-400 italic">
+                              {e.tag} — {e.reason}
+                            </p>
+                          )
+                        )}
+                      </div>
+                    )}
+
+                  {/* Refinement hint */}
+                  <p className="text-xs text-neutral-600 dark:text-neutral-400 mt-2 italic">
+                    Ask in the chat to refine this query
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Add the animation CSS */}
+      <style jsx global>{`
+        @keyframes highlight {
+          0% {
+            background-color: white;
+          }
+          30% {
+            background-color: rgba(59, 130, 246, 0.2);
+          }
+          100% {
+            background-color: white;
+          }
+        }
+
+        .highlight-animation {
+          animation: highlight 1s ease;
+        }
+      `}</style>
+    </div>
+  );
+}

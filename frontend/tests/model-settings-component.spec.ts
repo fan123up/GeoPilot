@@ -1,0 +1,421 @@
+import { test, expect, Page } from "@playwright/test";
+
+// Helper function to expand the Model Settings section
+async function expandModelSettings(page: Page) {
+  const modelButton = page.locator("button:has-text('Model Settings')");
+  await expect(modelButton).toBeVisible({ timeout: 5000 });
+  await modelButton.click();
+  await page.waitForTimeout(300);
+}
+
+const mockSettings = {
+  system_prompt: "You are a helpful AI assistant.",
+  tool_options: {},
+  example_geoserver_backends: [],
+  model_options: {
+    openai: [
+      {
+        name: "gpt-4o-mini",
+        max_tokens: 4000,
+        supports_parallel_tool_calls: true,
+      },
+      {
+        name: "gpt-3.5-turbo",
+        max_tokens: 2000,
+        supports_parallel_tool_calls: false,
+      },
+    ],
+    anthropic: [
+      {
+        name: "claude-3-opus",
+        max_tokens: 3000,
+        supports_parallel_tool_calls: true,
+      },
+      {
+        name: "claude-3-sonnet",
+        max_tokens: 2500,
+        supports_parallel_tool_calls: false,
+      },
+    ],
+  },
+  model_settings: {
+    model_provider: "openai",
+    model_name: "gpt-4o-mini",
+    max_tokens: 4000,
+    system_prompt: "You are a helpful AI assistant.",
+    message_window_size: null,
+    enable_parallel_tools: false,
+  },
+  session_id: "test-session-123",
+};
+
+test.describe("Model Settings Component", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route("**/settings/options", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(mockSettings),
+      });
+    });
+
+    await page.goto("/settings");
+    await page.waitForLoadState("networkidle");
+  });
+
+  test("should display model settings button", async ({ page }) => {
+    const modelButton = page.locator("button:has-text('Model Settings')");
+    await expect(modelButton).toBeVisible();
+  });
+
+  test("should expand and collapse model settings", async ({ page }) => {
+    const modelButton = page.locator("button:has-text('Model Settings')");
+    await expect(modelButton).toBeVisible();
+
+    // Initially collapsed - provider select should not be visible
+    const providerSelect = page.locator("select").first();
+    await expect(providerSelect).not.toBeVisible();
+
+    // Expand
+    await modelButton.click();
+    await page.waitForTimeout(300);
+    await expect(providerSelect).toBeVisible();
+
+    // Collapse
+    await modelButton.click();
+    await page.waitForTimeout(300);
+    await expect(providerSelect).not.toBeVisible();
+  });
+
+  test("should display all model providers", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const providerSelect = page.locator("select").first();
+    await expect(providerSelect).toBeVisible();
+
+    // Check that providers are in the dropdown
+    await expect(providerSelect).toContainText("Openai");
+    await expect(providerSelect).toContainText("Anthropic");
+  });
+
+  test("should display models for selected provider", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const modelSelect = page.locator("select").nth(1);
+    await expect(modelSelect).toBeVisible();
+
+    // Should show openai models initially
+    await expect(modelSelect).toContainText("gpt-4o-mini");
+    await expect(modelSelect).toContainText("gpt-3.5-turbo");
+  });
+
+  test("should change available models when provider changes", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const providerSelect = page.locator("select").first();
+    const modelSelect = page.locator("select").nth(1);
+
+    // Initially showing openai models
+    await expect(modelSelect).toContainText("gpt-4o-mini");
+
+    // Switch to anthropic
+    await providerSelect.selectOption("anthropic");
+    await page.waitForTimeout(300);
+
+    // Should now show anthropic models
+    await expect(modelSelect).toContainText("claude-3-opus");
+    await expect(modelSelect).toContainText("claude-3-sonnet");
+  });
+
+  test("should display max tokens input", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const maxTokensInput = page.locator('input[type="number"]').first();
+    await expect(maxTokensInput).toBeVisible();
+    await expect(maxTokensInput).toHaveValue("4000");
+  });
+
+  test("should allow changing max tokens", async ({ page }) => {
+    await expandModelSettings(page);
+
+    // Wait for model to be selected
+    await page.waitForTimeout(500);
+
+    const maxTokensInput = page.locator('input[type="number"]').first();
+    
+    // Test setting a valid value within the model's limit (4000)
+    await maxTokensInput.fill("3000");
+    await expect(maxTokensInput).toHaveValue("3000");
+    
+    // Test that validation clamps to max when exceeding limit
+    await maxTokensInput.fill("5000");
+    await page.waitForTimeout(200);
+    // Should be clamped to the model's max_tokens (4000)
+    await expect(maxTokensInput).toHaveValue("4000");
+  });
+
+  test("should display system prompt textarea", async ({ page }) => {
+    // System prompt is now in Agent Settings, not Model Settings
+    const agentButton = page.locator("button:has-text('Agent Settings')");
+    await expect(agentButton).toBeVisible({ timeout: 5000 });
+    await agentButton.click();
+    await page.waitForTimeout(300);
+
+    const systemPromptTextarea = page.locator("textarea").first();
+    await expect(systemPromptTextarea).toBeVisible();
+    await expect(systemPromptTextarea).toHaveValue("You are a helpful AI assistant.");
+  });
+
+  test("should allow editing system prompt", async ({ page }) => {
+    // System prompt is now in Agent Settings, not Model Settings
+    const agentButton = page.locator("button:has-text('Agent Settings')");
+    await expect(agentButton).toBeVisible({ timeout: 5000 });
+    await agentButton.click();
+    await page.waitForTimeout(300);
+
+    const systemPromptTextarea = page.locator("textarea").first();
+    await systemPromptTextarea.fill("You are a specialized geospatial assistant.");
+
+    await expect(systemPromptTextarea).toHaveValue(
+      "You are a specialized geospatial assistant.",
+    );
+  });
+
+  test("should persist model settings changes in store", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const providerSelect = page.locator("select").first();
+    await providerSelect.selectOption("anthropic");
+
+    // Check that changes are persisted in the store
+    const storeValue = await page.evaluate(() => {
+      // @ts-ignore - accessing window store for testing
+      return window.useSettingsStore?.getState().model_settings?.model_provider;
+    });
+
+    expect(storeValue).toBe("anthropic");
+  });
+
+  test("should update max tokens when model changes", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const providerSelect = page.locator("select").first();
+    const maxTokensInput = page.locator('input[type="number"]').first();
+
+    // Initially gpt-4 with 4000 tokens
+    await expect(maxTokensInput).toHaveValue("4000");
+
+    // Switch provider to anthropic (this triggers max_tokens update)
+    await providerSelect.selectOption("anthropic");
+    await page.waitForTimeout(300);
+
+    // Max tokens should update to the new provider's first model's max_tokens
+    await expect(maxTokensInput).toHaveValue("3000");
+  });
+
+  test("should handle empty model options gracefully", async ({ page }) => {
+    // Mock settings with no model options
+    await page.route("**/settings/options", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...mockSettings,
+          model_options: {},
+          model_settings: {
+            model_provider: "",
+            model_name: "",
+            max_tokens: 0,
+            system_prompt: "",
+          },
+        }),
+      });
+    });
+
+    await page.reload();
+    await page.waitForLoadState("networkidle");
+
+    await expandModelSettings(page);
+
+    // Component should still render without errors
+    const providerSelect = page.locator("select").first();
+    await expect(providerSelect).toBeVisible();
+  });
+
+  test("should display message window size input", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const messageWindowInput = page.locator('input[type="number"]').nth(1);
+    await expect(messageWindowInput).toBeVisible();
+    
+    // Should have placeholder showing default value
+    await expect(messageWindowInput).toHaveAttribute("placeholder", "20 (default)");
+    
+    // Should be empty initially (null value)
+    await expect(messageWindowInput).toHaveValue("");
+  });
+
+  test("should allow setting message window size", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const messageWindowInput = page.locator('input[type="number"]').nth(1);
+    
+    // Set a value
+    await messageWindowInput.fill("15");
+    await expect(messageWindowInput).toHaveValue("15");
+    
+    // Clear to use default
+    await messageWindowInput.fill("");
+    await expect(messageWindowInput).toHaveValue("");
+  });
+
+  test("should prevent negative message window size", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const messageWindowInput = page.locator('input[type="number"]').nth(1);
+    
+    // Try to set negative value
+    await messageWindowInput.fill("-5");
+    await messageWindowInput.blur();
+    await page.waitForTimeout(200);
+    
+    // Should be clamped to 0 or corrected
+    const value = await messageWindowInput.inputValue();
+    expect(parseInt(value) >= 0 || value === "").toBe(true);
+  });
+
+  test("should display message window size help text", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const helpText = page.locator("text=/Max recent messages to keep in context/");
+    await expect(helpText).toBeVisible();
+    await expect(helpText).toContainText("Leave empty for default (20)");
+    await expect(helpText).toContainText("Set to 0 to disable pruning");
+  });
+
+  test("should display enable parallel tools checkbox", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const checkbox = page.locator('input[type="checkbox"]#enable-parallel-tools');
+    await expect(checkbox).toBeVisible();
+    
+    // Should be unchecked by default
+    await expect(checkbox).not.toBeChecked();
+  });
+
+  test("should toggle enable parallel tools checkbox", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const checkbox = page.locator('input[type="checkbox"]#enable-parallel-tools');
+    
+    // Check the box
+    await checkbox.check();
+    await expect(checkbox).toBeChecked();
+    
+    // Uncheck the box
+    await checkbox.uncheck();
+    await expect(checkbox).not.toBeChecked();
+  });
+
+  test("should show 'Supported' badge when model supports parallel tools", async ({ page }) => {
+    await expandModelSettings(page);
+
+    // gpt-4 supports parallel tools
+    const supportedBadge = page.locator("text=/⚡ Supported/");
+    await expect(supportedBadge).toBeVisible();
+  });
+
+  test("should show 'Not Supported' badge when model doesn't support parallel tools", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const modelSelect = page.locator("select").nth(1);
+    
+    // Switch to gpt-3.5-turbo which doesn't support parallel tools
+    await modelSelect.selectOption("gpt-3.5-turbo");
+    await page.waitForTimeout(300);
+
+    const notSupportedBadge = page.locator("text=/✗ Not Supported/");
+    await expect(notSupportedBadge).toBeVisible();
+  });
+
+  test("should display experimental warning for parallel tools", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const warningText = page.locator("text=/⚠️ EXPERIMENTAL/");
+    await expect(warningText).toBeVisible();
+    await expect(warningText.locator('..').locator('..')).toContainText(
+      "concurrent tool execution"
+    );
+  });
+
+  test("should persist message window size changes in store", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const messageWindowInput = page.locator('input[type="number"]').nth(1);
+    await messageWindowInput.fill("10");
+    await page.waitForTimeout(200);
+
+    // Check that changes are persisted in the store
+    const storeValue = await page.evaluate(() => {
+      // @ts-ignore - accessing window store for testing
+      return window.useSettingsStore?.getState().model_settings?.message_window_size;
+    });
+
+    expect(storeValue).toBe(10);
+  });
+
+  test("should persist enable parallel tools changes in store", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const checkbox = page.locator('input[type="checkbox"]#enable-parallel-tools');
+    await checkbox.check();
+    await page.waitForTimeout(200);
+
+    // Check that changes are persisted in the store
+    const storeValue = await page.evaluate(() => {
+      // @ts-ignore - accessing window store for testing
+      return window.useSettingsStore?.getState().model_settings?.enable_parallel_tools;
+    });
+
+    expect(storeValue).toBe(true);
+  });
+
+  test("should update parallel tools badge when switching models", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const modelSelect = page.locator("select").nth(1);
+    
+    // Initially gpt-4 (supports parallel)
+    await expect(page.locator("text=/⚡ Supported/")).toBeVisible();
+    
+    // Switch to gpt-3.5-turbo (doesn't support parallel)
+    await modelSelect.selectOption("gpt-3.5-turbo");
+    await page.waitForTimeout(300);
+    
+    await expect(page.locator("text=/✗ Not Supported/")).toBeVisible();
+    
+    // Switch back to gpt-4
+    await modelSelect.selectOption("gpt-4o-mini");
+    await page.waitForTimeout(300);
+    
+    await expect(page.locator("text=/⚡ Supported/")).toBeVisible();
+  });
+
+  test("should allow setting message window size to 0", async ({ page }) => {
+    await expandModelSettings(page);
+
+    const messageWindowInput = page.locator('input[type="number"]').nth(1);
+    
+    // Set to 0 to disable pruning
+    await messageWindowInput.fill("0");
+    await expect(messageWindowInput).toHaveValue("0");
+    
+    // Verify in store
+    const storeValue = await page.evaluate(() => {
+      // @ts-ignore - accessing window store for testing
+      return window.useSettingsStore?.getState().model_settings?.message_window_size;
+    });
+
+    expect(storeValue).toBe(0);
+  });
+});

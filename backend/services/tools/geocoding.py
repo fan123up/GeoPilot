@@ -1,0 +1,1863 @@
+import hashlib
+import json
+import logging
+from typing import Any, Dict, List, Optional, Union
+
+import requests
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import tool
+from langchain_core.tools.base import InjectedToolCallId
+from langgraph.prebuilt import InjectedState
+from langgraph.types import Command
+from typing_extensions import Annotated
+
+from models.geodata import DataOrigin, DataType, GeoDataObject, ProcessingMetadata
+from models.states import GeoDataAgentState
+from services.storage.file_management import store_file
+
+from .constants import AMENITY_MAPPING, OSM_GEOMETRY_PREFERENCES
+from .geocoding.tag_resolver import SemanticTagResolver
+from .overpass import (
+    OverpassClient,
+    OverpassLocation,
+    OverpassQueryBuilder,
+    OverpassResultConverter,
+    create_feature_collection_geodata,
+    is_linear_feature_query,
+)
+
+# Valid OSM top-level keys for raw tag fallback validation
+VALID_OSM_KEYS = {
+    "amenity",
+    "shop",
+    "tourism",
+    "leisure",
+    "highway",
+    "railway",
+    "waterway",
+    "natural",
+    "building",
+    "landuse",
+    "boundary",
+    "place",
+    "aeroway",
+    "military",
+    "power",
+    "office",
+    "craft",
+    "man_made",
+    "historic",
+    "emergency",
+    "healthcare",
+    "sport",
+    "public_transport",
+    "barrier",
+    "geological",
+    "route",
+    "telecom",
+    "club",
+    "advertising",
+}
+
+logger = logging.getLogger(__name__)
+
+
+def _try_parse_raw_osm_tag(amenity_key: str) -> Optional[str]:
+    """
+    Try to parse a raw OSM tag in key=value format.
+
+    Accepts formats like "tourism=artwork", "shop=bicycle", "craft=*".
+    Validates the key against known OSM top-level keys.
+
+    Returns:
+        The validated "key=value" string, or None if not a valid raw tag.
+    """
+    if "=" not in amenity_key:
+        return None
+
+    parts = amenity_key.split("=", 1)
+    if len(parts) != 2:
+        return None
+
+    key, value = parts[0].strip(), parts[1].strip()
+    if not key or not value:
+        return None
+
+    if key not in VALID_OSM_KEYS:
+        return None
+
+    return f"{key}={value}"
+
+
+def _find_similar_amenity_keys(query: str, max_suggestions: int = 5) -> List[str]:
+    """
+    Find similar amenity keys from AMENITY_MAPPING using simple substring matching.
+
+    Returns a list of suggested amenity names.
+    """
+    query_lower = query.lower().strip()
+    suggestions = []
+
+    # First: exact substring matches
+    for key in AMENITY_MAPPING:
+        if query_lower in key or key in query_lower:
+            if key not in suggestions:
+                suggestions.append(key)
+            if len(suggestions) >= max_suggestions:
+                break
+
+    # Second: word-level overlap
+    if len(suggestions) < max_suggestions:
+        query_words = set(query_lower.replace("_", " ").split())
+        scored = []
+        for key in AMENITY_MAPPING:
+            key_words = set(key.replace("_", " ").split())
+            overlap = len(query_words & key_words)
+            if overlap > 0 and key not in suggestions:
+                scored.append((overlap, key))
+        scored.sort(key=lambda x: -x[0])
+        for _, key in scored[: max_suggestions - len(suggestions)]:
+            suggestions.append(key)
+
+    return suggestions
+
+
+def _expand_tags_with_llm(user_intent: str) -> Optional[List[Dict[str, Any]]]:
+    """
+    Use a cheap LLM to expand a user's intent into a list of OSM key=value tags.
+
+    Uses the deployment's configured LLM provider (via LLM_PROVIDER env var)
+    instead of hardcoding a specific provider.
+
+    Validates returned keys against VALID_OSM_KEYS and falls back to None on any error.
+
+    Args:
+        user_intent: Natural-language description of what to search for
+            (e.g. "residential buildings")
+
+    Returns:
+        List of {"key": ..., "value": ...} dicts, or None if expansion
+        failed/unavailable.
+    """
+    from services.ai.llm_config import get_llm
+
+    try:
+        llm = get_llm(max_tokens=400)
+    except Exception as e:
+        logger.warning(f"LLM tag expansion unavailable: {e}")
+        return None
+
+    try:
+        prompt = (
+            f'You are an OpenStreetMap expert. The user wants to find: "{user_intent}"\n\n'
+            "List all relevant OSM key=value tags that match this intent. Include related subtypes "
+            "and synonyms. Only use real, commonly-used OSM tags. "
+            "Exclude tags that are a completely different concept.\n\n"
+            'Respond ONLY with valid JSON: {"tags": [{"key": "building", "value": "residential"}, ...]}'
+        )
+        response = llm.invoke(prompt)
+        content = response.content
+
+        # Try to extract JSON from the response
+        # Some models may wrap JSON in markdown code blocks
+        text = content.strip()
+        if text.startswith("```"):
+            # Remove markdown code block wrapper
+            lines = text.split("\n")
+            text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
+
+        data = json.loads(text)
+        raw_tags = data.get("tags", [])
+
+        validated: List[Dict[str, Any]] = []
+        for tag in raw_tags:
+            if isinstance(tag, dict) and "key" in tag and "value" in tag:
+                k = str(tag["key"]).strip().lower()
+                v = str(tag["value"]).strip().lower()
+                if k and v and k in VALID_OSM_KEYS:
+                    validated.append({"key": k, "value": v})
+
+        if validated:
+            logger.info(f"LLM expanded '{user_intent}' to {len(validated)} tags: {validated}")
+            return validated
+        return None
+
+    except Exception as e:
+        logger.warning(f"LLM tag expansion failed for '{user_intent}': {e}")
+        return None
+
+
+headers_geopilot = {
+    "User-Agent": "GeoPilot, github.com/geopilot, next generation geospatial analysis using agents"
+}
+
+# Module-level semantic tag resolver (lazy-initialises on first use)
+_tag_resolver = SemanticTagResolver()
+
+
+def get_geometry_preferences(osm_key: str) -> Dict[str, Any]:
+    """
+    Get geometry preferences for an OSM key.
+
+    Returns default preferences if key not configured.
+
+    Args:
+        osm_key: OSM tag key (e.g., "highway")
+
+    Returns:
+        Dictionary with geometry preferences
+    """
+    default_prefs = {
+        "preferred_geometries": ["node", "way", "relation"],
+        "exclude_geometries": [],
+        "exclude_values": set(),
+        "description": "No specific geometry preferences",
+    }
+
+    return OSM_GEOMETRY_PREFERENCES.get(osm_key, default_prefs)
+
+
+def should_include_element_in_query(osm_key: str, osm_value: str, element_type: str) -> bool:
+    """
+    Determine if an element type should be included in the Overpass query.
+
+    Args:
+        osm_key: OSM tag key (e.g., "highway")
+        osm_value: OSM tag value (e.g., "*" or "motorway")
+        element_type: OSM element type ("node", "way", "relation")
+
+    Returns:
+        True if element type should be queried, False otherwise
+    """
+    # If wildcard query and key has preferences, use them
+    if osm_value == "*" and osm_key in OSM_GEOMETRY_PREFERENCES:
+        prefs = get_geometry_preferences(osm_key)
+        # For wildcard queries, also exclude element types whose values
+        # are mostly of a different geometry (e.g. bus_stop nodes under highway=*)
+        if element_type not in prefs["preferred_geometries"]:
+            return False
+        return True
+
+    # For specific (non-wildcard) values, always include all element types.
+    # The exclude_values mechanism is only for wildcard queries to skip
+    # value/geometry mismatches (e.g. highway=bus_stop as node under highway=*).
+    # When a user explicitly asks for e.g. highway=bus_stop, we must query it.
+    return True
+
+
+def should_include_geojson_geometry(
+    geojson_geometry_type: str, osm_key: str, osm_value: str = "*"
+) -> bool:
+    """
+    Determine if a GeoJSON geometry type should be included in results.
+
+    For linear feature queries (highway, railway, waterway, aeroway, power),
+    exclude Polygon geometries since these represent areas rather than the
+    expected linear features.
+
+    For aeroway point features (aerodrome, helipad, …), Polygons are valid
+    because large airports are mapped as closed ways / relations.
+
+    Args:
+        geojson_geometry_type: GeoJSON geometry type ("Point", "LineString", "Polygon")
+        osm_key: OSM tag key (e.g., "highway")
+        osm_value: OSM tag value (e.g., "aerodrome"); defaults to "*"
+
+    Returns:
+        True if geometry type should be included, False otherwise
+    """
+    linear_keys = {"highway", "railway", "waterway", "aeroway", "power"}
+    if osm_key in linear_keys and geojson_geometry_type == "Polygon":
+        if osm_key == "aeroway":
+            from services.tools.constants import AEROWAY_POINT_VALUES
+
+            if osm_value in AEROWAY_POINT_VALUES:
+                return True  # Polygon boundaries are valid for aerodromes etc.
+        return False
+    return True
+
+
+def should_include_element_in_results(
+    element: Dict[str, Any], osm_key: str, osm_value: str
+) -> bool:
+    """
+    Determine if an element should be included in results after query.
+    Provides a second layer of filtering based on geometry preferences.
+
+    Args:
+        element: OSM element from Overpass response
+        osm_key: OSM tag key
+        osm_value: OSM tag value
+
+    Returns:
+        True if element should be included, False otherwise
+    """
+    prefs = get_geometry_preferences(osm_key)
+    element_type = element.get("type")
+    element_tags = element.get("tags", {})
+
+    # Check if geometry type is excluded — but skip exclusion for aeroway point features
+    # (e.g. aerodrome, helipad) which are stored as nodes in OSM, not ways.
+    if element_type in prefs.get("exclude_geometries", []):
+        if osm_key == "aeroway":
+            from services.tools.constants import AEROWAY_POINT_VALUES
+
+            if osm_value in AEROWAY_POINT_VALUES:
+                pass  # Allow node elements for point aeroway features
+            else:
+                return False
+        else:
+            return False
+
+    # Check if specific tag value is excluded
+    element_value = element_tags.get(osm_key)
+    if element_value in prefs.get("exclude_values", set()):
+        return False
+
+    return True
+
+
+@tool
+def geocode_using_geonames(location: str, maxRows: int = 3) -> str:
+    """
+    Use for: Basic geocoding of place names (e.g., cities, countries, landmarks).
+    Returns coordinates and bounding boxes.
+    Strengths:
+    * Provides coordinates and a well managed system of hierarchical geographic data
+      specific to administrational units, places and landmarks.
+    * Is globally consistent and represents better the official administrative units.
+    * Has mulit language support.
+    * Can be used to quickly retrieve bounding boxes that can feed into other tools
+      such as the query_librarian_postgis
+    * If a user requires a map with multiple locations such as cities and landmarks
+      shown as points and a low zoom level, this datasource provides adequate data
+      for the map.
+
+    Limitations:
+    * Returns only coordinates and bounding boxes. Is therefore not a good fit if
+      user needs to actually see the boundaries of a country or city on the map
+    * Has no no street-level support and cannot serve for adress-level geocoding.
+    """
+    # Later * Can be used to retrieve hierarchical information on an address e.g.
+    # country, state, city etc. which can be helpful to get more information on
+    # ambiguous geocoding requests.
+    # Later: Tool can be used for reverse geocoding e.g. if a user inputs point data
+    # and would like to have a summary which points fall within which administrative
+    # unit.
+    # Later: Add support for advanced queries like hierarchical queries, find nearby
+    # places, find country information, time zones, elevation etc.
+    from os import getenv
+
+    url: str = (
+        f"http://api.geonames.org/searchJSON?q={location}&maxRows={maxRows}"
+        f"&username={getenv('GEONAMES_USER', 'geopilot')}"
+    )
+    response = requests.get(url)
+
+    if response.status_code == 200:
+        data = response.json()
+        if len(data) > 0:
+            places = data["geonames"]
+            return json.dumps(places)
+        else:
+            return "No results found."
+    else:
+        return "Error calling the GeoNames API."
+
+
+# Note: Contains GeoJSON & Bounding Box: TODO: sidechannel GeoJSON to not overload our LLMs
+@tool
+def geocode_using_nominatim(query: str, geojson: bool = False, maxRows: int = 3) -> str:
+    """Geocoding user requests using the Open Street Map Nominatim API."""
+    # TODO: Add support for OSM tags.
+    url: str = (
+        f"https://nominatim.openstreetmap.org/search"
+        f"?q={query}&format=json&polygon_kml={1 if geojson else 0}"
+        f"&addressdetails=1&limit={maxRows}"
+    )
+    response = requests.get(url, headers=headers_geopilot)
+    if response.status_code == 200:
+        data = response.json()
+        if len(data):
+            return json.dumps(data)
+        else:
+            return "No results found."
+    else:
+        logger.error("Nominatim API error: %s", response.json())
+        return "Error querying the Nominatim API."
+
+
+def create_geodata_object_from_geojson(
+    nominatim_response: Dict[str, Any],
+) -> Optional[GeoDataObject]:
+    """Saves the GeoJson response, saves it in storage and create a GeoDataObject from it"""
+    if "geojson" not in nominatim_response:
+        return None
+    place_id: str = str(nominatim_response["place_id"])
+    name: str = nominatim_response["name"]
+
+    # Build properties from nominatim response
+    properties: Dict[str, Any] = {}
+    for prop in [
+        "place_id",
+        "name",
+        "display_name",
+        "licence",
+        "osm_type",
+        "osm_id",
+        "lat",
+        "lon",
+        "class",
+        "type",
+        "place_rank",
+        "importance",
+        "addresstype",
+        "address",
+    ]:
+        if prop in nominatim_response:
+            properties[prop] = nominatim_response[prop]
+
+    geojson: Dict[str, Any] = {
+        "type": "Feature",
+        "geometry": nominatim_response["geojson"],
+        "properties": properties,
+    }
+
+    # Use ensure_ascii=False for proper UTF-8 encoding
+    # and separators for compact output
+    try:
+        content_bytes = json.dumps(geojson, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+
+        # Validate the JSON is complete by attempting to parse it
+        json.loads(content_bytes.decode("utf-8"))
+
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        error_msg = f"Error encoding/validating GeoJSON for " f"{place_id}_{name}.json: {e}"
+        print(error_msg)
+        return None
+
+    url, unique_id = store_file(f"{place_id}_{name}.json", content_bytes)
+    sha256_hex = hashlib.sha256(content_bytes).hexdigest()
+    size_bytes = len(content_bytes)
+    # Copy selected properties
+    properties: Dict[str, Any] = dict()
+    for prop in [
+        "place_id",
+        "licence",
+        "osm_type",
+        "osm_id",
+        "lat",
+        "lon",
+        "class",
+        "type",
+        "place_rank",
+        "addresstype",
+        "address",
+    ]:
+        if prop in nominatim_response:
+            properties[prop] = nominatim_response[prop]
+
+    bbox: Optional[List[str]] = nominatim_response["boundingbox"]
+    bounding_box: Optional[str]
+    if bbox and len(bbox) == 4:
+        lat_min, lat_max, lon_min, lon_max = map(float, bbox)
+        bounding_box = (
+            f"POLYGON(({lon_max} {lat_min},"
+            f"{lon_max} {lat_max},"
+            f"{lon_min} {lat_max},"
+            f"{lon_min} {lat_min},"
+            f"{lon_max} {lat_min}))"
+        )
+    else:
+        bounding_box = None
+
+    geoobject: GeoDataObject = GeoDataObject(
+        id=unique_id,
+        data_source_id="geocodeNominatim",
+        data_type=DataType.GEOJSON,
+        data_origin=DataOrigin.TOOL,
+        data_source=nominatim_response["licence"],
+        data_link=url,
+        name=name,
+        title=name,
+        description=nominatim_response["display_name"],
+        llm_description=nominatim_response["display_name"],
+        score=nominatim_response["importance"],
+        bounding_box=bounding_box,
+        layer_type="GeoJSON",
+        properties=properties,
+        sha256=sha256_hex,
+        size=size_bytes,
+    )
+
+    # Apply automatic styling
+    try:
+        from services.ai.automatic_styling import generate_automatic_style
+
+        # Determine geometry type from GeoJSON
+        geometry_type = nominatim_response.get("geojson", {}).get("type")
+
+        # Generate and apply style
+        geoobject.style = generate_automatic_style(
+            layer_name=name,
+            layer_description=nominatim_response.get("display_name"),
+            geometry_type=geometry_type,
+        )
+    except Exception as e:
+        logger.warning(f"Error applying automatic styling to {name}: {e}")
+        # Fallback: do not apply style or apply default manually if needed
+
+    return geoobject
+
+
+@tool
+def geocode_using_nominatim_to_geostate(
+    state: Annotated[GeoDataAgentState, InjectedState],
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    query: str,
+    geojson: bool = True,
+    maxRows: int = 5,
+    add_to_results: bool = True,
+) -> Union[Dict[str, Any], Command]:
+    """Geocode an address using OpenStreetMap Nominatim API. Returns Bounding Box for further
+    request and GeoJson of the area to show to the user.
+    Use for: Geocoding specific addresses or when detailed data (e.g., place types) is needed.
+    Strengths:
+    * Provides detailed polygon data as GeoJSON (e.g. polygons of countries, states, cities)
+      which can be used for map visualization and further analysis.
+    * For forward geocoding: Converts place names or addresses into geographic coordinates.
+    * Detailed address data, including house numbers, street names, neighborhoods, and postcodes.
+    * Provides the geographical extent (min/max latitude and longitude) for places, including
+      cities, countries, and sometimes smaller features like neighborhoods
+    * Categorizes results by OSM tags, indicating the type of place (e.g., city, street, building, amenity, shop)
+    * Reverse geocoding: Converts geographic coordinates into detailed address information.
+    Limitations:
+    * Nominatim relies on crowd-sourced OSM data, so accuracy and completeness depend on community contributions.
+    * Provides limited metadata. It does not include attributes like population, elevation, time zones, or weather data.
+    * does not support broader geographical queries like finding nearby places, hierarchical relationships beyond administrative divisions
+
+    Args:
+        query: The address or place name to geocode
+        geojson: Whether to request polygon geometry
+        maxRows: Maximum number of results
+        add_to_results: Whether to add output to the final result list.
+            Set to False for intermediate plan steps so only the final
+            step's output appears in results.
+    """
+    url: str = (
+        f"https://nominatim.openstreetmap.org/search"
+        f"?q={query}&format=json&polygon_geojson={1 if geojson else 0}"
+        f"&addressdetails=0&limit={maxRows}"
+    )
+    response = requests.get(url, headers=headers_geopilot)
+    if response.status_code == 200:
+        data = response.json()
+        if len(data):
+            cleaned_data: List[Dict[str, Any]] = []
+            new_geodata_objects: List[GeoDataObject] = []
+            for elem in data:
+                if "geojson" in elem:
+                    geocoded_object: Optional[GeoDataObject] = create_geodata_object_from_geojson(
+                        elem
+                    )
+                    del elem["geojson"]
+                    if geocoded_object:
+                        elem["id"] = geocoded_object.id
+                        elem["data_source_id"] = geocoded_object.data_source_id
+                        new_geodata_objects.append(geocoded_object)
+                cleaned_data.append(dict(elem))
+            if geojson:
+                # Simplified message for LLM
+                num_objects_created = sum(
+                    1 for elem in cleaned_data if "id" in elem and "data_source_id" in elem
+                )
+
+                actionable_layers_info = []
+                if num_objects_created > 0:
+                    for elem in cleaned_data:
+                        if "id" in elem and "data_source_id" in elem:
+                            layer_info = {
+                                "name": elem.get(
+                                    "name",
+                                    elem.get("display_name", "Unknown Location"),
+                                ),
+                                "id": elem["id"],
+                                "data_source_id": elem[
+                                    "data_source_id"
+                                ],  # Should be "geocodeNominatim"
+                                "display_name": elem.get("display_name", ""),
+                                "osm_type": elem.get("osm_type", ""),
+                                "type": elem.get("type", ""),
+                                "class": elem.get("class", ""),
+                            }
+                            actionable_layers_info.append(layer_info)
+
+                if not actionable_layers_info:
+                    tool_message_content = (
+                        f"Successfully geocoded '{query}'. Found "
+                        f"{len(cleaned_data)} potential result(s), but no "
+                        "GeoData objects with full geometry were created."
+                    )
+                else:
+                    tool_message_content = (
+                        f"Successfully geocoded '{query}'. Found "
+                        f"{len(cleaned_data)} potential result(s). "
+                        f"{len(actionable_layers_info)} GeoData object(s) "
+                        "with full geometry created and stored. "
+                    )
+
+                    # Provide structured info for the agent
+                    layer_details_for_agent = json.dumps(actionable_layers_info)
+
+                    # Build disambiguation info if multiple results
+                    if len(actionable_layers_info) > 1:
+                        # Build comparison table for the agent
+                        comparison_items = []
+                        for i, layer in enumerate(actionable_layers_info, 1):
+                            item = (
+                                f"  {i}. '{layer.get('display_name', layer['name'])}' "
+                                f"(type: {layer.get('type', 'unknown')}, "
+                                f"class: {layer.get('class', 'unknown')})"
+                            )
+                            comparison_items.append(item)
+                        comparison_text = "\n".join(comparison_items)
+
+                        disambiguation_hint = (
+                            "DISAMBIGUATION: Multiple results were found "
+                            "for this query. Present the results to the "
+                            "user as numbered options with distinguishing "
+                            "details (full location path, type) so they "
+                            "can choose the correct one.\n"
+                            f"Candidates:\n{comparison_text}\n"
+                        )
+                    else:
+                        disambiguation_hint = ""
+
+                    user_response_guidance = (
+                        f"{disambiguation_hint}"
+                        "RESPONSE INSTRUCTIONS:\n"
+                        "1. Confirm what was found and where.\n"
+                        "2. If showing boundaries/polygons, describe "
+                        "them in plain language (e.g., 'the city "
+                        "boundary of Munich' not 'a Polygon "
+                        "GeoJSON').\n"
+                        "3. The found layers are now listed and can "
+                        "be selected by the user to add to the map.\n"
+                        "4. Do NOT state or imply layers have already "
+                        "been added to the map.\n"
+                        "5. Do NOT include file paths or internal "
+                        "storage links.\n"
+                    )
+                    tool_message_content += (
+                        f"Actionable layer details: "
+                        f"{layer_details_for_agent}. "
+                        f"User response guidance: "
+                        f"{user_response_guidance}"
+                    )
+
+                return Command(
+                    update={
+                        "messages": [
+                            *state["messages"],
+                            ToolMessage(
+                                name="geocode_using_nominatim_to_geostate",
+                                content=tool_message_content,
+                                tool_call_id=tool_call_id,
+                            ),
+                        ],
+                        # Always write to geodata_last_results for chaining
+                        "geodata_last_results": new_geodata_objects,
+                        **({"geodata_results": new_geodata_objects} if add_to_results else {}),
+                    }
+                )
+            else:
+                # Simplified message if no GeoJSON was stored
+                tool_message_content = f"Successfully geocoded '{query}'. Found {len(cleaned_data)} potential result(s). No GeoJSON objects were stored as per request."
+                brief_results = [
+                    {
+                        "name": elem.get("name", elem.get("display_name", "Unknown")),
+                        "osm_id": elem.get("osm_id", "N/A"),
+                        "class": elem.get("class", "N/A"),
+                        "type": elem.get("type", "N/A"),
+                    }
+                    for elem in cleaned_data
+                ][:3]
+                tool_message_content += (
+                    f" First few results (name, osm_id, class, type): {json.dumps(brief_results)}"
+                )
+                return {
+                    "message": tool_message_content,
+                    "results_summary": brief_results,
+                }  # Return summary directly if not updating state
+        else:
+            return {"message": "No results found."}
+    else:
+        logger.error("Nominatim API error: %s", response.json())
+        return {"message": "Error querying the Nominatim API."}
+
+
+@tool
+def geocode_address_via_overpass(
+    state: Annotated[GeoDataAgentState, InjectedState],
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    street: str,
+    housenumber: Optional[str] = None,
+    city: Optional[str] = None,
+    postcode: Optional[str] = None,
+    max_results: int = 50,
+    timeout: int = 60,
+) -> Union[Dict[str, Any], Command]:
+    """
+    Search for a specific street address using OSM addr:* tags via the Overpass API.
+
+    Use this when the user asks for a specific building or address, such as
+    "221B Baker Street, London" or "Alexanderplatz 1, Berlin 10178".
+    Returns OSM nodes/ways/relations tagged with matching address components.
+    Prefer geocode_using_nominatim_to_geostate for broad place or city searches.
+
+    street: Street name, e.g. "Baker Street" or "Hauptstraße"
+    housenumber: House or building number, e.g. "221B" or "42"
+    city: City name used to spatially constrain the search, e.g. "London"
+    postcode: Postal or ZIP code, e.g. "NW1 6XE" or "10178"
+    max_results: Maximum number of OSM elements to return (default 50)
+    timeout: Overpass API timeout in seconds (default 60)
+    """
+    # Build addr:* component dict from provided arguments
+    address_components: Dict[str, str] = {"addr:street": street}
+    if housenumber:
+        address_components["addr:housenumber"] = housenumber
+    if postcode:
+        address_components["addr:postcode"] = postcode
+    # addr:city is not added when it will be used as a location constraint below
+
+    # Geocode city to spatially constrain the query (prevents global scan)
+    location: Optional[OverpassLocation] = None
+    city_label = city or ""
+    if city:
+        location, err = _geocode_location_for_overpass(city)
+        if err or location is None:
+            # Fall back to adding city as an addr: filter instead
+            address_components["addr:city"] = city
+            location = None
+            city_label = city
+
+    query_description = street
+    if housenumber:
+        query_description = f"{housenumber} {street}"
+    if city_label:
+        query_description = f"{query_description}, {city_label}"
+    if postcode:
+        query_description = f"{query_description} {postcode}"
+
+    query_builder = OverpassQueryBuilder(timeout=timeout, max_results=max_results)
+    try:
+        overpass_query = query_builder.build_address_query(
+            address_components=address_components,
+            location=location,
+            radius_meters=50000,  # 50 km radius around city centre as fallback
+        )
+    except ValueError as exc:
+        return Command(
+            update={
+                "messages": [
+                    *state["messages"],
+                    ToolMessage(
+                        name="geocode_address_via_overpass",
+                        content=str(exc),
+                        tool_call_id=tool_call_id,
+                    ),
+                ]
+            }
+        )
+
+    client = OverpassClient()
+    overpass_data, error_msg = client.execute_query(overpass_query, timeout=timeout)
+
+    if error_msg:
+        return Command(
+            update={
+                "messages": [
+                    *state["messages"],
+                    ToolMessage(
+                        name="geocode_address_via_overpass",
+                        content=f"Overpass error while searching for '{query_description}': {error_msg}",
+                        tool_call_id=tool_call_id,
+                    ),
+                ]
+            }
+        )
+
+    elements = (overpass_data or {}).get("elements", [])
+    if not elements:
+        return Command(
+            update={
+                "messages": [
+                    *state["messages"],
+                    ToolMessage(
+                        name="geocode_address_via_overpass",
+                        content=f"No address found for '{query_description}' in OSM.",
+                        tool_call_id=tool_call_id,
+                    ),
+                ]
+            }
+        )
+
+    # Convert elements to GeoJSON features
+    converter = OverpassResultConverter()
+    features = []
+    seen_ids: set = set()
+    for element in elements:
+        eid = f"{element.get('type', '')}/{element.get('id', '')}"
+        if eid in seen_ids:
+            continue
+        # Skip recursed helper elements that are not actual address-tagged matches.
+        tags = element.get("tags", {})
+        if not any(k.startswith("addr:") for k in tags):
+            continue
+        feature = converter.convert_element_to_geojson(element, osm_tag_filter=None)
+        if feature and feature.get("geometry"):
+            seen_ids.add(eid)
+            features.append(feature)
+
+    features = converter.deduplicate_features(features)
+
+    if not features:
+        return Command(
+            update={
+                "messages": [
+                    *state["messages"],
+                    ToolMessage(
+                        name="geocode_address_via_overpass",
+                        content=f"Found OSM elements for '{query_description}' but none had usable geometry.",
+                        tool_call_id=tool_call_id,
+                    ),
+                ]
+            }
+        )
+
+    # Group by geometry type and build collections
+    location_label = location.display_name if location else "global"
+    collection_obj = create_feature_collection_geodata(
+        features,
+        "Address",
+        query_description,
+        location_label,
+        "addr:street",
+        city_label or street,
+    )
+
+    if not collection_obj:
+        return Command(
+            update={
+                "messages": [
+                    *state["messages"],
+                    ToolMessage(
+                        name="geocode_address_via_overpass",
+                        content=f"Could not create a map layer for '{query_description}'.",
+                        tool_call_id=tool_call_id,
+                    ),
+                ]
+            }
+        )
+
+    collection_obj.processing_metadata = ProcessingMetadata(
+        operation="overpass_address_query",
+        crs_used="EPSG:4326",
+        crs_name="WGS 84",
+        auto_selected=True,
+        query_intent=query_description,
+        query_location=city_label or street,
+        resolution_method="address_tags",
+        resolution_detail="OSM addr:* tag lookup",
+        osm_tags_used=[f"{k}={v}" for k, v in address_components.items()],
+        osm_tags_excluded=[],
+        overpass_query=overpass_query,
+    )
+
+    return Command(
+        update={
+            "messages": [
+                *state["messages"],
+                ToolMessage(
+                    name="geocode_address_via_overpass",
+                    content=(
+                        f"Found {len(features)} OSM feature(s) for address '{query_description}'. "
+                        "The result is available as a map layer."
+                    ),
+                    tool_call_id=tool_call_id,
+                ),
+            ],
+            "geodata_last_results": [collection_obj],
+            "geodata_results": [collection_obj],
+        }
+    )
+
+
+# Helper function to convert a single Overpass API element to a GeoJSON Feature dictionary
+def convert_osm_element_to_geojson_feature(
+    element: Dict[str, Any], osm_tag_value_filter: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Converts a single Overpass API element to a GeoJSON Feature dictionary.
+    Returns None if the element cannot be converted or lacks geometry.
+    Applies an optional filter to include only elements with a specific tag and value.
+    """
+    if not element or "type" not in element or "id" not in element:
+        return None
+
+    osm_type = element["type"]
+    osm_id = str(element["id"])
+    properties = element.get("tags", {})
+
+    # Apply tag filter if provided
+    if osm_tag_value_filter:
+        key, value = osm_tag_value_filter.split("=", 1)
+        if not (properties.get(key) == value):
+            # If it's a node, it might be a geometry node for a way/relation that *does* have the tag.
+            # The Overpass query with "out geom" might return such nodes.
+            # We'll let it pass for now and rely on higher-level logic to decide if it's a primary feature.
+            # However, for constructing individual features, we are typically interested in those that *have* the tags.
+            # This function is now more general. The caller of this function (within the main tool)
+            # will decide which elements to process based on the primary query tags.
+            pass  # No strict filtering here, caller handles primary feature identification
+
+    # GeoJSON feature ID, can be non-unique if features are from different sources in a collection
+    feature_id = f"{osm_type}/{osm_id}"
+
+    geojson_feature: Dict[str, Any] = {
+        "type": "Feature",
+        "id": feature_id,
+        "properties": properties,
+        "geometry": None,
+    }
+
+    if osm_type == "node" and "lat" in element and "lon" in element:
+        geojson_feature["geometry"] = {
+            "type": "Point",
+            "coordinates": [float(element["lon"]), float(element["lat"])],
+        }
+    elif osm_type == "way" and "geometry" in element:  # Assumes geometry from "out geom;"
+        coords = [[float(pt["lon"]), float(pt["lat"])] for pt in element["geometry"]]
+        if (
+            len(coords) >= 2
+        ):  # Need at least 2 points for LineString, 4 for valid Polygon (3 unique + close)
+            if coords[0][0] == coords[-1][0] and coords[0][1] == coords[-1][1] and len(coords) >= 4:
+                geojson_feature["geometry"] = {
+                    "type": "Polygon",
+                    "coordinates": [coords],
+                }
+            else:
+                geojson_feature["geometry"] = {
+                    "type": "LineString",
+                    "coordinates": coords,
+                }
+        else:  # Not enough points
+            return None
+    elif osm_type == "relation":
+        # Prefer "out geom;" if available and results in a usable geometry.
+        # Overpass with "out geom;" on relations can be complex, sometimes returning members.
+        # We'll prioritize "center" for simplicity if "geometry" isn't directly usable as Polygon/LineString.
+        if (
+            "geometry" in element
+            and isinstance(element["geometry"], list)
+            and len(element["geometry"]) > 0
+        ):
+            # Attempt to treat relation geometry like way geometry if it's a list of points
+            # This is a simplification; true relation geometry might be MultiPolygon etc.
+            coords = [
+                [float(pt["lon"]), float(pt["lat"])]
+                for pt in element["geometry"]
+                if "lon" in pt and "lat" in pt
+            ]
+            if len(coords) >= 2:
+                if (
+                    coords[0][0] == coords[-1][0]
+                    and coords[0][1] == coords[-1][1]
+                    and len(coords) >= 4
+                ):
+                    geojson_feature["geometry"] = {
+                        "type": "Polygon",
+                        "coordinates": [coords],
+                    }
+                else:
+                    geojson_feature["geometry"] = {
+                        "type": "LineString",
+                        "coordinates": coords,
+                    }
+            # Fall through to center if complex geometry not parsable into simple Polygon/LineString
+
+        if (
+            geojson_feature["geometry"] is None
+            and "center" in element
+            and "lat" in element["center"]
+            and "lon" in element["center"]
+        ):
+            geojson_feature["geometry"] = {
+                "type": "Point",
+                "coordinates": [
+                    float(element["center"]["lon"]),
+                    float(element["center"]["lat"]),
+                ],
+            }
+        elif geojson_feature["geometry"] is None:  # No usable geometry for relation
+            return None
+    else:  # Unknown type or missing geometry info
+        return None
+
+    if not geojson_feature["geometry"]:  # Final check
+        return None
+
+    return geojson_feature
+
+
+# Helper function to create a GeoDataObject for a collection of features
+def create_collection_geodata_object(
+    features: List[Dict[str, Any]],
+    collection_type_name: str,  # e.g., "Points", "Areas", "Lines"
+    base_query_name: str,  # e.g., "restaurants near Eiffel Tower"
+    amenity_key_display: str,  # e.g., "Restaurants"
+    # e.g., "Eiffel Tower (using area bounds)" - for user-facing title/description
+    location_name_display: str,
+    osm_tag_kv_filter: str,  # e.g. "amenity=restaurant"
+    location_name_for_filename: str,  # e.g., "Eiffel Tower" - for cleaner filenames
+) -> Optional[GeoDataObject]:
+    """
+    Creates a single GeoDataObject for a FeatureCollection of a specific geometry type.
+    Saves the FeatureCollection to a single file.
+    """
+    if not features:
+        return None
+
+    # Create a FeatureCollection
+    feature_collection = {"type": "FeatureCollection", "features": features}
+
+    # Generate a unique ID and filename for the collection
+    safe_amenity_name = (
+        amenity_key_display.lower().replace(" ", "_").replace("=", "_").replace(":", "_")
+    )
+    # Use location_name_for_filename for a cleaner file path
+    safe_location_for_file = (
+        location_name_for_filename.lower().replace(" ", "_").replace(",", "").replace("'", "")
+    )
+    file_name = (
+        f"overpass_{safe_amenity_name}_{collection_type_name.lower()}_{safe_location_for_file}.json"
+    )
+
+    # Use ensure_ascii=False for proper UTF-8 encoding
+    # and separators for compact output
+    # This prevents unicode escape sequences and ensures clean JSON
+    try:
+        content_bytes = json.dumps(
+            feature_collection, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+
+        # Validate the JSON is complete by attempting to parse it
+        json.loads(content_bytes.decode("utf-8"))
+
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        print(f"Error encoding/validating GeoJSON for {file_name}: {e}")
+        return None
+
+    data_url, unique_id = store_file(file_name, content_bytes)
+    sha256_hex = hashlib.sha256(content_bytes).hexdigest()
+    size_bytes = len(content_bytes)
+
+    # Calculate combined bounding box for the FeatureCollection
+    all_lons: List[float] = []
+    all_lats: List[float] = []
+    for feature in features:
+        if feature["geometry"]:
+            geom_type = feature["geometry"]["type"]
+            coords = feature["geometry"]["coordinates"]
+            if geom_type == "Point":
+                all_lons.append(coords[0])
+                all_lats.append(coords[1])
+            elif geom_type == "LineString":
+                all_lons.extend([c[0] for c in coords])
+                all_lats.extend([c[1] for c in coords])
+            elif geom_type == "Polygon":
+                # Coords is a list of linear rings, take the first (outer) ring
+                poly_coords = coords[0]
+                all_lons.extend([c[0] for c in poly_coords])
+                all_lats.extend([c[1] for c in poly_coords])
+            # TODO: Handle MultiPoint, MultiLineString, MultiPolygon if they occur
+
+    bounding_box_str = None
+    if all_lons and all_lats:
+        min_lon, max_lon = min(all_lons), max(all_lons)
+        min_lat, max_lat = min(all_lats), max(all_lats)
+
+        # Create a small buffer if all features are points and very close, to make bbox visible
+        is_all_points = all(f["geometry"]["type"] == "Point" for f in features if f["geometry"])
+        if is_all_points and (max_lon - min_lon < 0.001) and (max_lat - min_lat < 0.001):
+            buffer = 0.001
+            min_lon -= buffer
+            max_lon += buffer
+            min_lat -= buffer
+            max_lat += buffer
+
+        bounding_box_str = (
+            f"POLYGON(({max_lon} {min_lat},"
+            f"{max_lon} {max_lat},"
+            f"{min_lon} {max_lat},"
+            f"{min_lon} {min_lat},"
+            f"{max_lon} {min_lat}))"
+        )
+
+    collection_name = (
+        f"{amenity_key_display} ({collection_type_name}) " f"near {location_name_display}"
+    )
+    description = f"{len(features)} {amenity_key_display.lower()} ({collection_type_name.lower()}) found matching '{osm_tag_kv_filter}' near {location_name_display}. Data from OpenStreetMap."
+
+    # For a collection, top-level properties might be limited or summary.
+    # Individual features retain their own properties.
+    collection_properties = {
+        "feature_count": len(features),
+        "query_amenity_key": amenity_key_display,
+        "query_location": location_name_display,  # Keep descriptive location here
+        "query_osm_tag": osm_tag_kv_filter,
+        "geometry_type_collected": collection_type_name,
+    }
+
+    geo_object = GeoDataObject(
+        id=unique_id,
+        data_source_id="geocodeOverpassCollection",  # New data_source_id
+        data_type=DataType.GEOJSON,
+        data_origin=DataOrigin.TOOL,
+        data_source="OpenStreetMap contributors",
+        data_link=data_url,
+        name=collection_name,
+        title=collection_name,
+        description=description,
+        llm_description=description,
+        score=0.85,  # Slightly higher score for a processed collection
+        bounding_box=bounding_box_str,
+        layer_type="GeoJSON",  # Could be "GeoJSON Points", "GeoJSON Polygons" etc. if FE can use it
+        properties=collection_properties,
+        sha256=sha256_hex,
+        size=size_bytes,
+    )
+
+    # Apply automatic styling
+    try:
+        from services.ai.automatic_styling import generate_automatic_style
+
+        # Map collection type to geometry type for styling
+        geometry_type_map = {
+            "Points": "Point",
+            "Lines": "LineString",
+            "Areas": "Polygon",
+            "Buildings": "Polygon",
+        }
+        geometry_type = geometry_type_map.get(collection_type_name, "Polygon")
+
+        # Generate and apply style
+        geo_object.style = generate_automatic_style(
+            layer_name=collection_name,
+            layer_description=description,
+            geometry_type=geometry_type,
+        )
+    except Exception as e:
+        logger.warning(f"Error applying automatic styling to {collection_name}: {e}")
+        # Fallback: do not apply style
+
+    return geo_object
+
+
+@tool
+def geocode_using_overpass_to_geostate(
+    state: Annotated[GeoDataAgentState, InjectedState],
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    query: str,
+    amenity_key: str,
+    location_name: str,
+    radius_meters: int = 10000,
+    max_results: int = 5000,
+    max_tags: int = 10,
+    timeout: int = 300,
+    center_lat: Optional[float] = None,
+    center_lon: Optional[float] = None,
+    add_to_results: bool = True,
+) -> Union[Dict[str, Any], Command]:
+    """
+    Geocode a location and search for amenities/POIs using the Overpass API.
+
+    Args:
+        state: The current agent state containing geodata and messages.
+        tool_call_id: The tool call ID for the response.
+        query: The user-friendly query/description for the search.
+        amenity_key: The OSM feature type to search for. Supports amenities
+            (e.g. "restaurant", "hospital"), infrastructure (e.g. "road",
+            "bridge", "highway"), military facilities (e.g. "military",
+            "barracks"), aviation (e.g. "airport", "aeroway"), natural features
+            (e.g. "waterway", "natural"), buildings, and places. Use generic
+            terms like "road" or "military" to search for all features of
+            that type. Also accepts raw OSM tags in key=value format
+            (e.g. "craft=brewery", "historic=castle", "sport=soccer")
+            for features not covered by the built-in mapping.
+        location_name: The location to search (e.g. "Paris", "London", "Germany").
+        radius_meters: Search radius in meters (default: 10000).
+        max_results: Maximum number of features to return (default: 5000). Increase
+            only if the user explicitly asks for more results, and warn them that
+            very large result sets may slow down the map.
+        max_tags: Maximum number of OSM tag combinations used to build the query
+            (default: 10). Higher values increase coverage for broad queries but
+            slow down the Overpass API search. Increase only if the user asks for
+            more complete results and a timeout is not already occurring.
+        timeout: Timeout for API requests in seconds (default: 300).
+        center_lat: Optional explicit latitude for center point search.
+        center_lon: Optional explicit longitude for center point search.
+        add_to_results: Whether to add output to the final result list.
+            Set to False for intermediate plan steps so only the final
+            step's output appears in results.
+
+    Returns:
+        A Command object to update the agent state or a dictionary with results.
+    """
+    # 1. Map amenity_key to OSM tag
+    amenity_key_cleaned = amenity_key.lower().replace(" ", "_")
+    osm_tag_kv = AMENITY_MAPPING.get(amenity_key_cleaned)
+    is_raw_tag = False
+    resolved_tags: Optional[List[Dict[str, Any]]] = None
+    resolution_method = "direct_match"
+    resolution_detail = "matched via static tag dictionary"
+
+    if not osm_tag_kv:
+        # Fallback 1: Try raw key=value format (e.g. "tourism=artwork")
+        raw_tag = _try_parse_raw_osm_tag(amenity_key.lower().strip())
+        if raw_tag:
+            osm_tag_kv = raw_tag
+            is_raw_tag = True
+            resolution_method = "direct_match"
+            resolution_detail = "parsed as raw OSM tag"
+            logger.info(f"Using raw OSM tag '{raw_tag}' (not in AMENITY_MAPPING)")
+
+    if not osm_tag_kv:
+        # Fallback 2: Semantic tag resolver (vector store + optional LLM filter)
+        # Threshold: if the semantic resolver returns fewer than this many tags, the result
+        # is considered "thin" (typically caused by the hashing embedding model returning no
+        # vector matches, leaving only fuzzy-matched candidates that miss semantic subtypes
+        # such as building=detached for "residential buildings"). In that case Stage 3 is
+        # supplemented with the LLM expansion from Stage 4 to fill the coverage gap.
+        _SEMANTIC_THIN_THRESHOLD = 5
+
+        semantic_resolution = _tag_resolver.resolve(amenity_key)
+        if semantic_resolution is not None and semantic_resolution.tags:
+            resolved_tags = semantic_resolution.tags
+            primary = resolved_tags[0]
+            osm_tag_kv = f"{primary['key']}={primary['value']}"
+            resolution_method = semantic_resolution.method
+            resolution_detail = semantic_resolution.detail
+            logger.info(
+                f"Semantic resolver resolved '{amenity_key}' to {len(resolved_tags)} tags, "
+                f"primary: {osm_tag_kv}"
+            )
+
+            # If the semantic result is thin, supplement with LLM expansion so broad
+            # queries ("houses where people live") don't miss subtypes (detached, terrace…)
+            if len(resolved_tags) < _SEMANTIC_THIN_THRESHOLD:
+                logger.info(
+                    f"Semantic result thin ({len(resolved_tags)} tags < {_SEMANTIC_THIN_THRESHOLD}), "
+                    f"supplementing with LLM expansion for '{amenity_key}'"
+                )
+                expanded = _expand_tags_with_llm(amenity_key)
+                if expanded:
+                    existing = {f"{t['key']}={t['value']}" for t in resolved_tags}
+                    added = 0
+                    for tag in expanded:
+                        tag_str = f"{tag['key']}={tag['value']}"
+                        if tag_str not in existing:
+                            resolved_tags.append(tag)
+                            existing.add(tag_str)
+                            added += 1
+                    if added:
+                        resolution_detail = semantic_resolution.detail + " + LLM supplemented"
+                        logger.info(
+                            f"Supplemented semantic result with {added} LLM tags, "
+                            f"total: {len(resolved_tags)}"
+                        )
+        else:
+            # Fallback 3: LLM semantic tag expansion (Phase A)
+            expanded = _expand_tags_with_llm(amenity_key)
+            if expanded:
+                resolved_tags = expanded
+                primary = expanded[0]
+                osm_tag_kv = f"{primary['key']}={primary['value']}"
+                resolution_method = "llm_expansion"  # noqa: F841 — used by F07
+                resolution_detail = "expanded via AI-assisted tag expansion"  # noqa: F841
+                logger.info(f"Using LLM-expanded tags, primary: {osm_tag_kv}")
+
+    if not osm_tag_kv:
+        # Fallback 3: Suggest similar known amenity keys
+        suggestions = _find_similar_amenity_keys(amenity_key)
+        if suggestions:
+            suggestion_list = ", ".join(f"'{s}'" for s in suggestions[:5])
+            hint = (
+                f"I could not find an exact match for '{amenity_key}' "
+                f"in my known features. Did you mean one of these: "
+                f"{suggestion_list}? "
+                "Alternatively, you can provide a raw OSM tag in "
+                "key=value format (e.g., 'craft=brewery', "
+                "'historic=castle', 'healthcare=pharmacy')."
+            )
+        else:
+            hint = (
+                f"I could not find '{amenity_key}' in my known "
+                "features. You can try: a common amenity type "
+                "(e.g., 'restaurant', 'hospital', 'park'), or a raw "
+                "OSM tag in key=value format (e.g., 'craft=brewery', "
+                "'historic=castle', 'sport=soccer')."
+            )
+        return Command(
+            update={
+                "messages": [
+                    *state["messages"],
+                    ToolMessage(
+                        name="geocode_using_overpass_to_geostate",
+                        content=hint,
+                        tool_call_id=tool_call_id,
+                    ),
+                ]
+            }
+        )
+
+    amenity_key_display = amenity_key_cleaned.replace("_", " ").title()
+    if is_raw_tag:
+        # For raw tags, use the value part as display name
+        _, raw_value = osm_tag_kv.split("=", 1)
+        amenity_key_display = raw_value.replace("_", " ").title()
+        if raw_value == "*":
+            raw_key = osm_tag_kv.split("=", 1)[0]
+            amenity_key_display = raw_key.replace("_", " ").title()
+    osm_query_key, osm_query_value = osm_tag_kv.split("=", 1)
+
+    # 2. Create location object - use explicit coordinates if provided
+    if center_lat is not None and center_lon is not None:
+        # Use explicit lat/lon center
+        location = OverpassLocation(
+            display_name=location_name,
+            lat=center_lat,
+            lon=center_lon,
+        )
+        search_mode_description = (
+            f"within {radius_meters}m of coordinates ({center_lat}, {center_lon})"
+        )
+        logger.info(f"Using explicit center: lat={center_lat}, lon={center_lon}")
+    else:
+        # Geocode the location name
+        location, error_msg = _geocode_location_for_overpass(location_name)
+        if error_msg:
+            return Command(
+                update={
+                    "messages": [
+                        *state["messages"],
+                        ToolMessage(
+                            name="geocode_using_overpass_to_geostate",
+                            content=error_msg,
+                            tool_call_id=tool_call_id,
+                        ),
+                    ]
+                }
+            )
+        search_mode_description = _get_search_mode_description(location, radius_meters)
+
+    # 3. Build and execute Overpass query
+    # Cap resolved_tags to prevent overly complex union queries that time out
+    tags_were_capped = resolved_tags is not None and len(resolved_tags) > max_tags
+    if tags_were_capped:
+        logger.info(
+            f"Capping resolved tags from {len(resolved_tags)} to {max_tags} "
+            f"to avoid Overpass query complexity timeout."
+        )
+        resolved_tags = resolved_tags[:max_tags]
+        primary = resolved_tags[0]
+        osm_tag_kv = f"{primary['key']}={primary['value']}"
+
+    query_builder = OverpassQueryBuilder(timeout=timeout, max_results=max_results)
+
+    try:
+        if resolved_tags and len(resolved_tags) > 1:
+            # Multi-tag path: LLM-expanded semantic query
+            overpass_query = query_builder.build_multi_tag_query(
+                resolved_tags, location, radius_meters=radius_meters
+            )
+        else:
+            # Single-tag path: existing behaviour
+            # Prioritize ways/relations for linear feature queries to reduce point noise
+            prioritize_ways = is_linear_feature_query(osm_query_key, osm_query_value)
+            if prioritize_ways:
+                logger.info(f"{osm_query_key} query detected, prioritizing ways/relations")
+            overpass_query = query_builder.build_amenity_query(
+                osm_query_key,
+                osm_query_value,
+                location,
+                radius_meters=radius_meters,
+                prioritize_ways_relations=prioritize_ways,
+            )
+    except ValueError as e:
+        return Command(
+            update={
+                "messages": [
+                    *state["messages"],
+                    ToolMessage(
+                        name="geocode_using_overpass_to_geostate",
+                        content=str(e),
+                        tool_call_id=tool_call_id,
+                    ),
+                ]
+            }
+        )
+
+    # Execute the query
+    client = OverpassClient()
+    overpass_data, error_msg = client.execute_query(overpass_query, timeout=timeout)
+
+    if error_msg:
+        return Command(
+            update={
+                "messages": [
+                    *state["messages"],
+                    ToolMessage(
+                        name="geocode_using_overpass_to_geostate",
+                        content=(
+                            f"Error querying Overpass for '{amenity_key_display}' "
+                            f"{search_mode_description}: {error_msg}"
+                        ),
+                        tool_call_id=tool_call_id,
+                    ),
+                ]
+            }
+        )
+
+    # 4. Process elements
+    if "elements" not in overpass_data or not overpass_data["elements"]:
+        return Command(
+            update={
+                "messages": [
+                    *state["messages"],
+                    ToolMessage(
+                        name="geocode_using_overpass_to_geostate",
+                        content=(f"No '{amenity_key_display}' found {search_mode_description}."),
+                        tool_call_id=tool_call_id,
+                    ),
+                ]
+            }
+        )
+
+    # Convert elements to GeoJSON features
+    converter = OverpassResultConverter()
+    all_features = []
+    processed_osm_ids = set()
+
+    for element in overpass_data["elements"]:
+        osm_element_id = f"{element.get('type', '')}/{element.get('id', '')}"
+        if osm_element_id in processed_osm_ids:
+            continue
+
+        # Apply geometry preferences filtering on raw elements
+        # For multi-tag queries: include if any tag's preferences allow it
+        if resolved_tags:
+            if not any(
+                should_include_element_in_results(element, t["key"], t["value"])
+                for t in resolved_tags
+            ):
+                continue
+        else:
+            if not should_include_element_in_results(element, osm_query_key, osm_query_value):
+                continue
+
+        # For multi-tag: skip converter-level filtering (handled below via is_tagged)
+        if resolved_tags:
+            feature = converter.convert_element_to_geojson(element, osm_tag_filter=None)
+        else:
+            feature = converter.convert_element_to_geojson(
+                element, osm_tag_filter=(osm_query_key, osm_query_value)
+            )
+
+        if feature and feature.get("geometry"):
+            # Check tag matching
+            element_tags = feature.get("properties", {})
+            if resolved_tags:
+                # Multi-tag: match if element carries any of the resolved tags
+                is_tagged = any(
+                    (t["value"] == "*" and t["key"] in element_tags)
+                    or element_tags.get(t["key"]) == t["value"]
+                    for t in resolved_tags
+                )
+            elif osm_query_value == "*":
+                is_tagged = osm_query_key in element_tags
+            else:
+                is_tagged = element_tags.get(osm_query_key) == osm_query_value
+
+            if element["type"] == "node" or is_tagged:
+                # Check if this GeoJSON geometry type should be included
+                geom_type = feature["geometry"]["type"]
+                if resolved_tags:
+                    geom_ok = any(
+                        should_include_geojson_geometry(geom_type, t["key"]) for t in resolved_tags
+                    )
+                else:
+                    geom_ok = should_include_geojson_geometry(
+                        geom_type, osm_query_key, osm_query_value
+                    )
+                if not geom_ok:
+                    continue
+
+                processed_osm_ids.add(osm_element_id)
+                all_features.append(feature)
+
+    # Deduplicate features
+    all_features = converter.deduplicate_features(all_features)
+
+    # Group by geometry type
+    point_features, polygon_features, linestring_features = converter.group_features_by_geometry(
+        all_features
+    )
+
+    # Filter out point noise for linear feature queries when lines/areas exist
+    if is_linear_feature_query(osm_query_key, osm_query_value):
+        point_features = converter.filter_point_noise(
+            point_features, polygon_features, linestring_features
+        )
+
+    # 5. Create GeoDataObject collections
+    created_collections: List[GeoDataObject] = []
+    actionable_layers_info = []
+
+    # Build the list of OSM tags actually used in the query
+    if resolved_tags:
+        osm_tags_used_list = [f"{t['key']}={t['value']}" for t in resolved_tags]
+    else:
+        osm_tags_used_list = [osm_tag_kv] if osm_tag_kv else []
+
+    for features, collection_type in [
+        (point_features, "Points"),
+        (polygon_features, "Areas"),
+        (linestring_features, "Lines"),
+    ]:
+        if features:
+            collection_obj = create_feature_collection_geodata(
+                features,
+                collection_type,
+                amenity_key_display,
+                location.display_name,
+                osm_tag_kv,
+                location_name,
+            )
+            if collection_obj:
+                # Attach geocoding query transparency metadata
+                collection_obj.processing_metadata = ProcessingMetadata(
+                    operation="overpass_query",
+                    crs_used="EPSG:4326",
+                    crs_name="WGS 84",
+                    auto_selected=True,
+                    query_intent=amenity_key,
+                    query_location=location.display_name,
+                    resolution_method=resolution_method,
+                    resolution_detail=resolution_detail,
+                    osm_tags_used=osm_tags_used_list,
+                    osm_tags_excluded=[],
+                    overpass_query=overpass_query,
+                )
+                created_collections.append(collection_obj)
+                props = collection_obj.properties or {}
+                actionable_layers_info.append(
+                    {
+                        "name": collection_obj.name,
+                        "type": collection_type,
+                        "count": len(features),
+                        "id": collection_obj.id,
+                        "data_source_id": "geocodeOverpassCollection",
+                        "geometry_label": props.get("geometry_label", collection_type.lower()),
+                        "geometry_hint": props.get("geometry_hint", ""),
+                        "sample_names": props.get("sample_names", []),
+                        "spatial_extent": props.get("spatial_extent"),
+                    }
+                )
+
+    if not created_collections:
+        return Command(
+            update={
+                "messages": [
+                    *state["messages"],
+                    ToolMessage(
+                        name="geocode_using_overpass_to_geostate",
+                        content=(
+                            f"No '{amenity_key_display}' found with parsable geometry "
+                            f"{search_mode_description}."
+                        ),
+                        tool_call_id=tool_call_id,
+                    ),
+                ]
+            }
+        )
+
+    # Collect only the NEW results — reducers handle merging
+    new_geodata = list(created_collections)
+
+    total_features = len(point_features) + len(polygon_features) + len(linestring_features)
+
+    # Build response message
+    tool_message_content = _build_overpass_response_message(
+        amenity_key_display,
+        search_mode_description,
+        total_features,
+        max_results,
+        actionable_layers_info,
+        location.display_name,
+        resolution_method=resolution_method,
+        osm_tags_used=osm_tags_used_list,
+        tags_were_capped=tags_were_capped,
+        max_tags=max_tags,
+    )
+
+    state_update: Dict[str, Any] = {
+        "messages": [
+            *state["messages"],
+            ToolMessage(
+                name="geocode_using_overpass_to_geostate",
+                content=tool_message_content,
+                tool_call_id=tool_call_id,
+            ),
+        ],
+        # Always write to geodata_last_results for chaining
+        "geodata_last_results": new_geodata,
+    }
+    if add_to_results:
+        state_update["geodata_results"] = new_geodata
+
+    return Command(update=state_update)
+
+
+def _geocode_location_for_overpass(
+    location_name: str,
+) -> tuple[Optional[OverpassLocation], Optional[str]]:
+    """
+    Geocode a location name for use with Overpass queries.
+
+    Returns:
+        Tuple of (OverpassLocation, None) on success or (None, error_message) on failure.
+    """
+    nominatim_url = (
+        f"https://nominatim.openstreetmap.org/search"
+        f"?q={location_name}&format=json&limit=1&addressdetails=1&polygon_geojson=0"
+    )
+
+    try:
+        response = requests.get(nominatim_url, headers=headers_geopilot, timeout=20)
+        response.raise_for_status()
+        location_data_list = response.json()
+
+        if not location_data_list:
+            return None, f"Could not find location: {location_name}"
+
+        location_data = location_data_list[0]
+        display_name = location_data.get("display_name", location_name)
+
+        # Try to get OSM relation ID for area-based search
+        osm_relation_id = None
+        if location_data.get("osm_type") == "relation" and "osm_id" in location_data:
+            try:
+                osm_relation_id = int(location_data["osm_id"])
+            except ValueError:
+                pass
+
+        # Try to get bounding box
+        bbox = None
+        if "boundingbox" in location_data and len(location_data["boundingbox"]) == 4:
+            try:
+                raw_bbox = location_data["boundingbox"]
+                bbox = (
+                    float(raw_bbox[0]),  # south
+                    float(raw_bbox[2]),  # west
+                    float(raw_bbox[1]),  # north
+                    float(raw_bbox[3]),  # east
+                )
+            except ValueError:
+                pass
+
+        # Try to get center point
+        lat = None
+        lon = None
+        if "lat" in location_data and "lon" in location_data:
+            try:
+                lat = float(location_data["lat"])
+                lon = float(location_data["lon"])
+            except ValueError:
+                pass
+
+        if osm_relation_id is None and bbox is None and lat is None:
+            return None, (
+                f"Could not determine a usable geographic filter "
+                f"(area, bounding box, or center point) for: {location_name}"
+            )
+
+        return (
+            OverpassLocation(
+                display_name=display_name,
+                osm_relation_id=osm_relation_id,
+                lat=lat,
+                lon=lon,
+                bbox=bbox,
+            ),
+            None,
+        )
+
+    except requests.exceptions.RequestException as e:
+        return None, f"Error geocoding '{location_name}': {str(e)}"
+    except (KeyError, IndexError, ValueError) as e:
+        return None, f"Could not parse geocoding result for '{location_name}': {str(e)}"
+
+
+def _get_search_mode_description(location: OverpassLocation, radius_meters: int) -> str:
+    """Get a human-readable description of the search mode."""
+    if location.has_area:
+        return (
+            f"within the boundaries of '{location.display_name}' "
+            f"(OSM Relation ID: {location.osm_relation_id})"
+        )
+    elif location.has_bbox:
+        return f"within the bounding box of '{location.display_name}'"
+    elif location.has_point:
+        return f"within {radius_meters}m of the center of '{location.display_name}'"
+    return f"near '{location.display_name}'"
+
+
+def _build_overpass_response_message(
+    amenity_display: str,
+    search_mode: str,
+    total_features: int,
+    max_results: int,
+    layers_info: List[Dict[str, Any]],
+    location_display: str,
+    resolution_method: Optional[str] = None,
+    osm_tags_used: Optional[List[str]] = None,
+    tags_were_capped: bool = False,
+    max_tags: int = 10,
+) -> str:
+    """Build the response message for the LLM.
+
+    Produces a structured message that helps the agent present results
+    as clear, user-friendly choices with plain-language descriptions
+    instead of GIS jargon.
+    """
+    if not layers_info:
+        return (
+            f"Found {amenity_display} {search_mode}, "
+            "but could not form any distinct geometry layers."
+        )
+
+    msg = (
+        f"Found {total_features} '{amenity_display}' feature(s) {search_mode}. "
+        f"Created {len(layers_info)} collection layer(s). "
+    )
+
+    if total_features >= max_results:
+        msg += (
+            f"LIMIT_INFO: The query returned the maximum allowed number of "
+            f"features ({max_results}). If you need more results, you can ask "
+            "me to increase this limit. However, please be aware that a very "
+            "large number of features can significantly degrade map "
+            "performance. "
+        )
+
+    if tags_were_capped:
+        msg += (
+            f"TAG_CAP_INFO: The semantic search returned more OSM tag combinations "
+            f"than the current limit of {max_tags}. Only the {max_tags} most relevant "
+            f"tags were queried. If you suspect results are incomplete, you can ask me "
+            f"to increase the tag limit (e.g. to 15 or 20), but be aware that more tags "
+            f"make the query slower and may cause a timeout for large areas. "
+        )
+
+    layer_details = json.dumps(layers_info)
+
+    # Build geometry choice descriptions for the agent
+    choice_descriptions = []
+    for layer in layers_info:
+        label = layer.get("geometry_label", layer.get("type", "").lower())
+        hint = layer.get("geometry_hint", "")
+        count = layer.get("count", 0)
+        samples = layer.get("sample_names", [])
+        name = layer.get("name", "Unknown")
+
+        extent = layer.get("spatial_extent")
+
+        choice_desc = f"- '{name}': {count} {label}"
+        if hint:
+            choice_desc += f" ({hint})"
+        if extent:
+            choice_desc += f", {extent}"
+        if samples:
+            sample_str = ", ".join(samples[:3])
+            if len(samples) > 3:
+                sample_str += ", ..."
+            choice_desc += f". Examples: {sample_str}"
+        choice_descriptions.append(choice_desc)
+
+    choices_text = "\n".join(choice_descriptions)
+
+    guidance = (
+        "RESPONSE INSTRUCTIONS:\n"
+        "1. Tell the user what you searched for and where: "
+        f"'{amenity_display}' {search_mode}.\n"
+        "2. Present the available layers as CHOICES using plain language. "
+        "Do NOT use GIS jargon like 'Points', 'Lines', 'Polygons', "
+        "'LineString', 'GeoJSON'. Instead use the friendly labels from "
+        "the layer details (e.g., 'locations', 'buildings', "
+        "'road network', 'boundaries').\n"
+        "3. Briefly explain what each option shows so the user can make "
+        "an informed choice (use the geometry_hint from the layer "
+        "details).\n"
+        "4. If sample feature names are available, mention a few "
+        "examples.\n"
+        "5. Offer to add all layers if the user wants a complete "
+        "picture.\n"
+        "6. State that the user can select which layers to add to the "
+        "map.\n"
+        "7. Do NOT state or imply layers have already been added to the "
+        "map.\n"
+        "8. Do NOT include file paths, sandbox links, or internal "
+        "storage paths.\n"
+        f"\nAvailable choices:\n{choices_text}\n"
+    )
+
+    if resolution_method and resolution_method != "direct_match":
+        method_label = {
+            "llm_expansion": "AI-assisted tag expansion",
+            "semantic": "semantic search across the OSM tag vocabulary",
+            "fuzzy": "fuzzy matching",
+        }.get(resolution_method, "automatic resolution")
+
+        tags_summary = ", ".join(
+            (t.split("=")[1] if "=" in t else t) for t in (osm_tags_used or [])[:6]
+        )
+
+        construction_guidance = (
+            "\nQUERY CONSTRUCTION CONTEXT (share this with the user):\n"
+            f"- Resolution method: {method_label}\n"
+            f"- OSM tags used: {tags_summary}\n"
+            "- Offer to refine: suggest the user can narrow down "
+            "(e.g., 'only apartments') or expand the tag selection.\n"
+        )
+        guidance += construction_guidance
+
+    msg += f"Actionable layer details: {layer_details}. " f"User response guidance: {guidance}"
+    return msg
+
+
+"""
+Additional notable finds for even more geocoding:
+OpenStreetMap Overpass API: bit more mighty
+https://wiki.openstreetmap.org/wiki/Overpass_API#Quick_Start_(60_seconds):_for_Developers/Programmers
+
+Combining e.g. Geonames Latitude & Longitude + Admin Level + https://global.mapit.mysociety.org could show us bounding boxes
+
+Geoapify
+https://apidocs.geoapify.com/docs/boundaries/
+
+Geoboundaries
+https://www.geoboundaries.org/
+"""

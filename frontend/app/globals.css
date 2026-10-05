@@ -1,0 +1,2479 @@
+@import "tailwindcss";
+@tailwind utilities;
+
+@theme {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  /* Color scales - defining them in @theme makes them available as Tailwind utilities */
+  --color-primary-50: #f7f7f8;
+  --color-primary-100: #eeeef0;
+  --color-primary-200: #d8d8df;
+  --color-primary-300: #b7b9c2;
+  --color-primary-400: #8f91a1;
+  --color-primary-500: #717386;
+  --color-primary-600: #5b5c6e;
+  --color-primary-700: #505160;
+  --color-primary-800: #40414c;
+  --color-primary-900: #383842;
+  --color-primary-950: #25252c;
+
+  --color-second-primary-50: #f5f8f9;
+  --color-second-primary-100: #e8eef1;
+  --color-second-primary-200: #d6e1e7;
+  --color-second-primary-300: #baccd6;
+  --color-second-primary-400: #99b2c1;
+  --color-second-primary-500: #809bb1;
+  --color-second-primary-600: #68829e;
+  --color-second-primary-700: #627793;
+  --color-second-primary-800: #546279;
+  --color-second-primary-900: #465262;
+  --color-second-primary-950: #2e343d;
+
+  --color-secondary-50: #fafaeb;
+  --color-secondary-100: #f2f4d3;
+  --color-secondary-200: #e6eaac;
+  --color-secondary-300: #d3db7b;
+  --color-secondary-400: #bec952;
+  --color-secondary-500: #aebd38;
+  --color-secondary-600: #7e8b25;
+  --color-secondary-700: #606a21;
+  --color-secondary-800: #4c551f;
+  --color-secondary-900: #41491e;
+  --color-secondary-950: #22270c;
+
+  --color-tertiary-50: #f4f8ed;
+  --color-tertiary-100: #e5f0d7;
+  --color-tertiary-200: #cde2b4;
+  --color-tertiary-300: #adcf87;
+  --color-tertiary-400: #8eba61;
+  --color-tertiary-500: #719f43;
+  --color-tertiary-600: #598234;
+  --color-tertiary-700: #43612a;
+  --color-tertiary-800: #394e26;
+  --color-tertiary-900: #324324;
+  --color-tertiary-950: #18240f;
+
+  --color-danger-50: #fef2f2;
+  --color-danger-100: #fee2e2;
+  --color-danger-200: #fecaca;
+  --color-danger-300: #fca5a5;
+  --color-danger-400: #f87171;
+  --color-danger-500: #ef4444;
+  --color-danger-600: #dc2626;
+  --color-danger-700: #b91c1c;
+  --color-danger-800: #991b1b;
+  --color-danger-900: #7f1d1d;
+  --color-danger-950: #450a0a;
+
+  --color-warning-50: #fffbeb;
+  --color-warning-100: #fef3c7;
+  --color-warning-200: #fde68a;
+  --color-warning-300: #fcd34d;
+  --color-warning-400: #fbbf24;
+  --color-warning-500: #f59e0b;
+  --color-warning-600: #d97706;
+  --color-warning-700: #b45309;
+  --color-warning-800: #92400e;
+  --color-warning-900: #78350f;
+  --color-warning-950: #451a03;
+
+  --color-info-50: #eff6ff;
+  --color-info-100: #dbeafe;
+  --color-info-200: #bfdbfe;
+  --color-info-300: #93c5fd;
+  --color-info-400: #60a5fa;
+  --color-info-500: #3b82f6;
+  --color-info-600: #2563eb;
+  --color-info-700: #1d4ed8;
+  --color-info-800: #1e40af;
+  --color-info-900: #1e3a8a;
+  --color-info-950: #172554;
+
+  --color-neutral-50: #ffffff;
+  --color-neutral-100: #f9fafb;
+  --color-neutral-200: #f3f4f6;
+  --color-neutral-300: #e5e7eb;
+  --color-neutral-400: #d1d5db;
+  --color-neutral-500: #9ca3af;
+  --color-neutral-600: #6b7280;
+  --color-neutral-700: #4b5563;
+  --color-neutral-800: #374151;
+  --color-neutral-900: #1f2937;
+  --color-neutral-950: #000000;
+
+  --color-corporate-1-50: #fff1f2;
+  --color-corporate-1-100: #ffe4e6;
+  --color-corporate-1-200: #fecdd3;
+  --color-corporate-1-300: #fda4af;
+  --color-corporate-1-400: #fb7185;
+  --color-corporate-1-500: #f43f5e;
+  --color-corporate-1-600: #e11d48;
+  --color-corporate-1-700: #be123c;
+  --color-corporate-1-800: #9f1239;
+  --color-corporate-1-900: #881337;
+  --color-corporate-1-950: #4c0519;
+
+  --color-corporate-2-50: #f0f9ff;
+  --color-corporate-2-100: #e0f2fe;
+  --color-corporate-2-200: #bae6fd;
+  --color-corporate-2-300: #7dd3fc;
+  --color-corporate-2-400: #38bdf8;
+  --color-corporate-2-500: #0ea5e9;
+  --color-corporate-2-600: #0284c7;
+  --color-corporate-2-700: #0369a1;
+  --color-corporate-2-800: #075985;
+  --color-corporate-2-900: #0c4a6e;
+  --color-corporate-2-950: #082f49;
+
+  --color-corporate-3-50: #faf5ff;
+  --color-corporate-3-100: #f3e8ff;
+  --color-corporate-3-200: #e9d5ff;
+  --color-corporate-3-300: #d8b4fe;
+  --color-corporate-3-400: #c084fc;
+  --color-corporate-3-500: #a855f7;
+  --color-corporate-3-600: #9333ea;
+  --color-corporate-3-700: #7e22ce;
+  --color-corporate-3-800: #6b21a8;
+  --color-corporate-3-900: #581c87;
+  --color-corporate-3-950: #3b0764;
+}
+/* Global Design Parameters and Gradient Scales https://tailwindcss.com, gradients by https://uicolors.app/create, other color documentation: https://tailwindcss.com/docs/color */
+:root {
+  /* Base Colors */
+  --first-primary: #505160;
+  --second-primary: #68829E;
+  --secondary: #AEBD38;
+  --tertiary: #598234;
+
+  /* Primary Gradient Scale (Main neutral/text colors) */
+  --primary-50: #f7f7f8;
+  --primary-100: #eeeef0;
+  --primary-200: #d8d8df;
+  --primary-300: #b7b9c2;
+  --primary-400: #8f91a1;
+  --primary-500: #717386;
+  --primary-600: #5b5c6e;
+  --primary-700: #505160;
+  --primary-800: #40414c;
+  --primary-900: #383842;
+  --primary-950: #25252c;
+
+  /* Second Primary Gradient Scale (Main action buttons) */
+  --second-primary-50: #f5f8f9;
+  --second-primary-100: #e8eef1;
+  --second-primary-200: #d6e1e7;
+  --second-primary-300: #baccd6;
+  --second-primary-400: #99b2c1;
+  --second-primary-500: #809bb1;
+  --second-primary-600: #68829e;
+  --second-primary-700: #627793;
+  --second-primary-800: #546279;
+  --second-primary-900: #465262;
+  --second-primary-950: #2e343d;
+
+  /* Secondary Gradient Scale (Supporting accents) */
+  --secondary-50: #fafaeb;
+  --secondary-100: #f2f4d3;
+  --secondary-200: #e6eaac;
+  --secondary-300: #d3db7b;
+  --secondary-400: #bec952;
+  --secondary-500: #aebd38;
+  --secondary-600: #7e8b25;
+  --secondary-700: #606a21;
+  --secondary-800: #4c551f;
+  --secondary-900: #41491e;
+  --secondary-950: #22270c;
+
+  /* Tertiary Gradient Scale (Success states) */
+  --tertiary-50: #f4f8ed;
+  --tertiary-100: #e5f0d7;
+  --tertiary-200: #cde2b4;
+  --tertiary-300: #adcf87;
+  --tertiary-400: #8eba61;
+  --tertiary-500: #719f43;
+  --tertiary-600: #598234;
+  --tertiary-700: #43612a;
+  --tertiary-800: #394e26;
+  --tertiary-900: #324324;
+  --tertiary-950: #18240f;
+
+  /* Danger Gradient Scale (Error/delete states) */
+  --danger-50: #fef2f2;
+  --danger-100: #fee2e2;
+  --danger-200: #fecaca;
+  --danger-300: #fca5a5;
+  --danger-400: #f87171;
+  --danger-500: #ef4444;
+  --danger-600: #dc2626;
+  --danger-700: #b91c1c;
+  --danger-800: #991b1b;
+  --danger-900: #7f1d1d;
+  --danger-950: #450a0a;
+
+  /* Warning Gradient Scale (Warning states) */
+  --warning-50: #fffbeb;
+  --warning-100: #fef3c7;
+  --warning-200: #fde68a;
+  --warning-300: #fcd34d;
+  --warning-400: #fbbf24;
+  --warning-500: #f59e0b;
+  --warning-600: #d97706;
+  --warning-700: #b45309;
+  --warning-800: #92400e;
+  --warning-900: #78350f;
+  --warning-950: #451a03;
+
+  /* Info Gradient Scale (Informational states) */
+  --info-50: #eff6ff;
+  --info-100: #dbeafe;
+  --info-200: #bfdbfe;
+  --info-300: #93c5fd;
+  --info-400: #60a5fa;
+  --info-500: #3b82f6;
+  --info-600: #2563eb;
+  --info-700: #1d4ed8;
+  --info-800: #1e40af;
+  --info-900: #1e3a8a;
+  --info-950: #172554;
+
+  /* Neutral Gradient Scale (Pure whites/blacks/grays) */
+  --neutral-50: #ffffff;
+  --neutral-100: #f9fafb;
+  --neutral-200: #f3f4f6;
+  --neutral-300: #e5e7eb;
+  --neutral-400: #d1d5db;
+  --neutral-500: #9ca3af;
+  --neutral-600: #6b7280;
+  --neutral-700: #4b5563;
+  --neutral-800: #374151;
+  --neutral-900: #1f2937;
+  --neutral-950: #000000;
+
+  /* Corporate Color 1 (Rose - for layer types) */
+  --corporate-1-50: #fff1f2;
+  --corporate-1-100: #ffe4e6;
+  --corporate-1-200: #fecdd3;
+  --corporate-1-300: #fda4af;
+  --corporate-1-400: #fb7185;
+  --corporate-1-500: #f43f5e;
+  --corporate-1-600: #e11d48;
+  --corporate-1-700: #be123c;
+  --corporate-1-800: #9f1239;
+  --corporate-1-900: #881337;
+  --corporate-1-950: #4c0519;
+
+  /* Corporate Color 2 (Sky - for layer types) */
+  --corporate-2-50: #f0f9ff;
+  --corporate-2-100: #e0f2fe;
+  --corporate-2-200: #bae6fd;
+  --corporate-2-300: #7dd3fc;
+  --corporate-2-400: #38bdf8;
+  --corporate-2-500: #0ea5e9;
+  --corporate-2-600: #0284c7;
+  --corporate-2-700: #0369a1;
+  --corporate-2-800: #075985;
+  --corporate-2-900: #0c4a6e;
+  --corporate-2-950: #082f49;
+
+  /* Corporate Color 3 (Purple - for layer types) */
+  --corporate-3-50: #faf5ff;
+  --corporate-3-100: #f3e8ff;
+  --corporate-3-200: #e9d5ff;
+  --corporate-3-300: #d8b4fe;
+  --corporate-3-400: #c084fc;
+  --corporate-3-500: #a855f7;
+  --corporate-3-600: #9333ea;
+  --corporate-3-700: #7e22ce;
+  --corporate-3-800: #6b21a8;
+  --corporate-3-900: #581c87;
+  --corporate-3-950: #3b0764;
+}
+
+/* Primary Color Utility Classes */
+/* Background Colors */
+.bg-primary-50 {
+  background-color: var(--primary-50);
+}
+
+.bg-primary-100 {
+  background-color: var(--primary-100);
+}
+
+.bg-primary-200 {
+  background-color: var(--primary-200);
+}
+
+.bg-primary-300 {
+  background-color: var(--primary-300);
+}
+
+.bg-primary-400 {
+  background-color: var(--primary-400);
+}
+
+.bg-primary-500 {
+  background-color: var(--primary-500);
+}
+
+.bg-primary-600 {
+  background-color: var(--primary-600);
+}
+
+.bg-primary-700 {
+  background-color: var(--primary-700);
+}
+
+.bg-primary-800 {
+  background-color: var(--primary-800);
+}
+
+.bg-primary-900 {
+  background-color: var(--primary-900);
+}
+
+.bg-primary-950 {
+  background-color: var(--primary-950);
+}
+
+/* Text Colors */
+.text-primary-50 {
+  color: var(--primary-50);
+}
+
+.text-primary-100 {
+  color: var(--primary-100);
+}
+
+.text-primary-200 {
+  color: var(--primary-200);
+}
+
+.text-primary-300 {
+  color: var(--primary-300);
+}
+
+.text-primary-400 {
+  color: var(--primary-400);
+}
+
+.text-primary-500 {
+  color: var(--primary-500);
+}
+
+.text-primary-600 {
+  color: var(--primary-600);
+}
+
+.text-primary-700 {
+  color: var(--primary-700);
+}
+
+.text-primary-800 {
+  color: var(--primary-800);
+}
+
+.text-primary-900 {
+  color: var(--primary-900);
+}
+
+.text-primary-950 {
+  color: var(--primary-950);
+}
+
+/* Border Colors */
+.border-primary-50 {
+  border-color: var(--primary-50);
+}
+
+.border-primary-100 {
+  border-color: var(--primary-100);
+}
+
+.border-primary-200 {
+  border-color: var(--primary-200);
+}
+
+.border-primary-300 {
+  border-color: var(--primary-300);
+}
+
+.border-primary-400 {
+  border-color: var(--primary-400);
+}
+
+.border-primary-500 {
+  border-color: var(--primary-500);
+}
+
+.border-primary-600 {
+  border-color: var(--primary-600);
+}
+
+.border-primary-700 {
+  border-color: var(--primary-700);
+}
+
+.border-primary-800 {
+  border-color: var(--primary-800);
+}
+
+.border-primary-900 {
+  border-color: var(--primary-900);
+}
+
+.border-primary-950 {
+  border-color: var(--primary-950);
+}
+
+/* Hover Background Colors */
+.hover\:bg-primary-50:hover {
+  background-color: var(--primary-50);
+}
+
+.hover\:bg-primary-100:hover {
+  background-color: var(--primary-100);
+}
+
+.hover\:bg-primary-200:hover {
+  background-color: var(--primary-200);
+}
+
+.hover\:bg-primary-300:hover {
+  background-color: var(--primary-300);
+}
+
+.hover\:bg-primary-400:hover {
+  background-color: var(--primary-400);
+}
+
+.hover\:bg-primary-500:hover {
+  background-color: var(--primary-500);
+}
+
+.hover\:bg-primary-600:hover {
+  background-color: var(--primary-600);
+}
+
+.hover\:bg-primary-700:hover {
+  background-color: var(--primary-700);
+}
+
+.hover\:bg-primary-800:hover {
+  background-color: var(--primary-800);
+}
+
+.hover\:bg-primary-900:hover {
+  background-color: var(--primary-900);
+}
+
+.hover\:bg-primary-950:hover {
+  background-color: var(--primary-950);
+}
+
+/* Secondary Color Utility Classes */
+/* Background Colors */
+.bg-secondary-50 {
+  background-color: var(--secondary-50);
+}
+
+.bg-secondary-100 {
+  background-color: var(--secondary-100);
+}
+
+.bg-secondary-200 {
+  background-color: var(--secondary-200);
+}
+
+.bg-secondary-300 {
+  background-color: var(--secondary-300);
+}
+
+.bg-secondary-400 {
+  background-color: var(--secondary-400);
+}
+
+.bg-secondary-500 {
+  background-color: var(--secondary-500);
+}
+
+.bg-secondary-600 {
+  background-color: var(--secondary-600);
+}
+
+.bg-secondary-700 {
+  background-color: var(--secondary-700);
+}
+
+.bg-secondary-800 {
+  background-color: var(--secondary-800);
+}
+
+.bg-secondary-900 {
+  background-color: var(--secondary-900);
+}
+
+.bg-secondary-950 {
+  background-color: var(--secondary-950);
+}
+
+/* Text Colors */
+.text-secondary-50 {
+  color: var(--secondary-50);
+}
+
+.text-secondary-100 {
+  color: var(--secondary-100);
+}
+
+.text-secondary-200 {
+  color: var(--secondary-200);
+}
+
+.text-secondary-300 {
+  color: var(--secondary-300);
+}
+
+.text-secondary-400 {
+  color: var(--secondary-400);
+}
+
+.text-secondary-500 {
+  color: var(--secondary-500);
+}
+
+.text-secondary-600 {
+  color: var(--secondary-600);
+}
+
+.text-secondary-700 {
+  color: var(--secondary-700);
+}
+
+.text-secondary-800 {
+  color: var(--secondary-800);
+}
+
+.text-secondary-900 {
+  color: var(--secondary-900);
+}
+
+.text-secondary-950 {
+  color: var(--secondary-950);
+}
+
+/* Border Colors */
+.border-secondary-50 {
+  border-color: var(--secondary-50);
+}
+
+.border-secondary-100 {
+  border-color: var(--secondary-100);
+}
+
+.border-secondary-200 {
+  border-color: var(--secondary-200);
+}
+
+.border-secondary-300 {
+  border-color: var(--secondary-300);
+}
+
+.border-secondary-400 {
+  border-color: var(--secondary-400);
+}
+
+.border-secondary-500 {
+  border-color: var(--secondary-500);
+}
+
+.border-secondary-600 {
+  border-color: var(--secondary-600);
+}
+
+.border-secondary-700 {
+  border-color: var(--secondary-700);
+}
+
+.border-secondary-800 {
+  border-color: var(--secondary-800);
+}
+
+.border-secondary-900 {
+  border-color: var(--secondary-900);
+}
+
+.border-secondary-950 {
+  border-color: var(--secondary-950);
+}
+
+/* Hover Background Colors */
+.hover\:bg-secondary-50:hover {
+  background-color: var(--secondary-50);
+}
+
+.hover\:bg-secondary-100:hover {
+  background-color: var(--secondary-100);
+}
+
+.hover\:bg-secondary-200:hover {
+  background-color: var(--secondary-200);
+}
+
+.hover\:bg-secondary-300:hover {
+  background-color: var(--secondary-300);
+}
+
+.hover\:bg-secondary-400:hover {
+  background-color: var(--secondary-400);
+}
+
+.hover\:bg-secondary-500:hover {
+  background-color: var(--secondary-500);
+}
+
+.hover\:bg-secondary-600:hover {
+  background-color: var(--secondary-600);
+}
+
+.hover\:bg-secondary-700:hover {
+  background-color: var(--secondary-700);
+}
+
+.hover\:bg-secondary-800:hover {
+  background-color: var(--secondary-800);
+}
+
+.hover\:bg-secondary-900:hover {
+  background-color: var(--secondary-900);
+}
+
+.hover\:bg-secondary-950:hover {
+  background-color: var(--secondary-950);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: var(--primary-700);
+    --foreground: var(--secondary-700);
+  }
+}
+
+/* Dark mode styles - applies when .dark class is on html element */
+.dark {
+  color-scheme: dark;
+}
+
+.dark body {
+  color: var(--neutral-200);
+  background: var(--primary-950);
+}
+
+/* Dark mode utility overrides */
+.dark .bg-neutral-50 {
+  background-color: var(--primary-900);
+}
+
+.dark .bg-neutral-100 {
+  background-color: var(--primary-800);
+}
+
+.dark .bg-neutral-200 {
+  background-color: var(--primary-700);
+}
+
+.dark .bg-primary-50 {
+  background-color: var(--primary-900);
+}
+
+.dark .bg-primary-100 {
+  background-color: var(--primary-800);
+}
+
+.dark .bg-primary-200 {
+  background-color: var(--primary-700);
+}
+
+.dark .bg-secondary-50 {
+  background-color: var(--secondary-900);
+}
+
+.dark .bg-secondary-100 {
+  background-color: var(--secondary-800);
+}
+
+.dark .bg-info-50 {
+  background-color: var(--info-900);
+}
+
+.dark .bg-info-100 {
+  background-color: var(--info-800);
+}
+
+/* Dark mode text colors */
+.dark .text-primary-900 {
+  color: var(--neutral-100);
+}
+
+.dark .text-primary-800 {
+  color: var(--neutral-200);
+}
+
+.dark .text-primary-700 {
+  color: var(--neutral-300);
+}
+
+.dark .text-primary-600 {
+  color: var(--neutral-400);
+}
+
+.dark .text-neutral-900 {
+  color: var(--neutral-100);
+}
+
+.dark .text-neutral-800 {
+  color: var(--neutral-200);
+}
+
+.dark .text-neutral-700 {
+  color: var(--neutral-300);
+}
+
+.dark .text-secondary-900 {
+  color: var(--secondary-200);
+}
+
+.dark .text-info-900 {
+  color: var(--info-200);
+}
+
+.dark .text-info-800 {
+  color: var(--info-300);
+}
+
+/* Dark mode borders */
+.dark .border-primary-300 {
+  border-color: var(--primary-700);
+}
+
+.dark .border-primary-200 {
+  border-color: var(--primary-800);
+}
+
+.dark .border-info-200 {
+  border-color: var(--info-800);
+}
+
+/* Dark mode hover states */
+.dark .hover\:border-primary-400:hover {
+  border-color: var(--primary-600);
+}
+
+.dark .hover\:bg-primary-100:hover {
+  background-color: var(--primary-700);
+}
+
+.dark .hover\:bg-primary-200:hover {
+  background-color: var(--primary-700);
+}
+
+.dark .hover\:bg-primary-300:hover {
+  background-color: var(--primary-600);
+}
+
+.dark .hover\:bg-primary-700:hover {
+  background-color: var(--primary-600);
+}
+
+.dark .hover\:bg-primary-800:hover {
+  background-color: var(--primary-700);
+}
+
+/* Dark mode buttons and interactive elements */
+.dark .bg-primary-800 {
+  background-color: var(--primary-700);
+}
+
+.dark .bg-primary-700 {
+  background-color: var(--primary-600);
+}
+
+.dark .bg-second-primary-200 {
+  background-color: var(--second-primary-700);
+}
+
+.dark .bg-secondary-600 {
+  background-color: var(--secondary-500);
+}
+
+.dark .text-secondary-600 {
+  color: var(--secondary-400);
+}
+
+.dark .text-info-600 {
+  color: var(--info-400);
+}
+
+.dark .bg-info-600 {
+  background-color: var(--info-500);
+}
+
+/* Dark mode settings panels */
+.dark .bg-info-100 {
+  background-color: var(--info-900);
+  color: var(--neutral-200);
+}
+
+.dark .text-info-800 {
+  color: var(--info-300);
+}
+
+/* Keep white text in dark mode */
+.dark .text-white {
+  color: var(--neutral-50);
+}
+
+/* Dark mode input and form elements */
+.dark input[type="text"],
+.dark input[type="email"],
+.dark input[type="password"],
+.dark input[type="search"],
+.dark input[type="color"],
+.dark textarea,
+.dark select {
+  background-color: var(--primary-800);
+  color: var(--neutral-200);
+  border-color: var(--primary-700);
+}
+
+.dark input[type="text"]:focus,
+.dark input[type="email"]:focus,
+.dark input[type="password"]:focus,
+.dark input[type="search"]:focus,
+.dark textarea:focus,
+.dark select:focus {
+  border-color: var(--secondary-500);
+  background-color: var(--primary-750);
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: var(--neutral-500);
+}
+
+/* Dark mode secondary color adjustments */
+.dark .hover\:bg-secondary-800:hover {
+  background-color: var(--secondary-700);
+}
+
+.dark .bg-secondary-50 {
+  background-color: var(--secondary-800);
+}
+
+.dark .bg-secondary-100 {
+  background-color: var(--secondary-800);
+}
+
+.dark .bg-secondary-200 {
+  background-color: var(--secondary-700);
+}
+
+.dark .hover\:bg-secondary-200:hover {
+  background-color: var(--secondary-600);
+}
+
+.dark .text-secondary-700 {
+  color: var(--secondary-300);
+}
+
+.dark .border-secondary-200 {
+  border-color: var(--secondary-700);
+}
+
+.dark .border-secondary-300 {
+  border-color: var(--secondary-600);
+}
+
+.dark .border-secondary-500 {
+  border-color: var(--secondary-500);
+}
+
+.dark .text-secondary-900 {
+  color: var(--secondary-200);
+}
+
+/* Dark mode for white backgrounds and containers */
+.dark .bg-white {
+  background-color: var(--primary-900);
+}
+
+.dark .hover\:bg-neutral-100:hover {
+  background-color: var(--primary-700);
+}
+
+.dark .hover\:bg-neutral-400:hover {
+  background-color: var(--neutral-600);
+}
+
+.dark .hover\:bg-info-700:hover {
+  background-color: var(--info-600);
+}
+
+/* Dark mode for settings components */
+.dark .hover\:bg-primary-50:hover {
+  background-color: var(--primary-800);
+}
+
+.dark .text-neutral-900 {
+  color: var(--neutral-100);
+}
+
+.dark .bg-neutral-300 {
+  background-color: var(--neutral-700);
+}
+
+body {
+  color: var(--primary-700);
+  background: var(--primary-100);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Add custom styling for markdown chat content */
+.chat-markdown {
+  @apply text-sm;
+}
+
+.chat-markdown h1 {
+  @apply text-lg font-bold mt-2 mb-1;
+}
+
+.chat-markdown h2 {
+  @apply text-base font-bold mt-2 mb-1;
+}
+
+.chat-markdown h3 {
+  @apply text-sm font-bold mt-2 mb-1;
+}
+
+.chat-markdown ul {
+  @apply list-disc pl-4 my-1;
+}
+
+.chat-markdown ol {
+  @apply list-decimal pl-4 my-1;
+}
+
+.chat-markdown li {
+  @apply my-0.5;
+}
+
+.chat-markdown code {
+  @apply bg-gray-100 rounded px-1;
+}
+
+.chat-markdown pre {
+  @apply bg-gray-100 p-2 rounded my-1 text-xs overflow-auto;
+}
+
+.chat-markdown a {
+  @apply text-blue-600 hover:underline;
+}
+
+.chat-markdown blockquote {
+  @apply border-l-4 border-gray-300 pl-2 italic my-1;
+}
+
+.chat-markdown strong {
+  @apply font-bold;
+}
+
+.chat-markdown em {
+  @apply italic;
+}
+
+.chat-markdown p {
+  @apply mt-1 mb-1;
+}
+
+/* End of custom markdown styling */
+
+/* Chat Message Classes */
+.chat-message {
+  @apply max-w-[80%] px-4 py-2 rounded-lg;
+}
+
+.chat-message-user {
+  @apply bg-second-primary-200 rounded-tr-none text-right border border-primary-300;
+}
+
+.chat-message-ai {
+  @apply bg-neutral-50 rounded-tl-none border border-primary-200;
+}
+
+.chat-message-loading {
+  @apply bg-neutral-50 rounded-tl-none border border-primary-200;
+}
+
+.chat-message-tool {
+  @apply bg-info-50 rounded border border-info-200;
+}
+
+/* Dark mode chat messages */
+.dark .chat-message-user {
+  background-color: var(--second-primary-700);
+  border-color: var(--second-primary-600);
+  color: var(--neutral-100);
+}
+
+.dark .chat-message-ai {
+  background-color: var(--primary-800);
+  border-color: var(--primary-700);
+  color: var(--neutral-200);
+}
+
+.dark .chat-message-loading {
+  background-color: var(--primary-800);
+  border-color: var(--primary-700);
+  color: var(--neutral-200);
+}
+
+.dark .chat-message-tool {
+  background-color: var(--info-900);
+  border-color: var(--info-700);
+  color: var(--neutral-200);
+}
+
+/* Dark mode for inline styled elements (AgentInterface details popup) */
+.dark [style*="backgroundColor: white"],
+.dark [style*="background-color: white"] {
+  background-color: var(--primary-800) !important;
+  color: var(--neutral-200) !important;
+}
+
+.dark [style*="color: #333"] {
+  color: var(--neutral-200) !important;
+}
+
+.dark [style*="border: 1px solid #ddd"] {
+  border-color: var(--primary-700) !important;
+}
+
+/* Dark mode markdown content */
+.dark .chat-markdown code {
+  background-color: var(--primary-700);
+  color: var(--neutral-200);
+}
+
+.dark .chat-markdown pre {
+  background-color: var(--primary-700);
+  color: var(--neutral-200);
+}
+
+.dark .chat-markdown a {
+  color: var(--info-400);
+}
+
+.dark .chat-markdown blockquote {
+  border-color: var(--primary-600);
+  color: var(--neutral-300);
+}
+
+/* Dark mode for collapsible settings components - prevent white flash during transitions */
+.dark .border.border-primary-300.rounded.bg-white.overflow-hidden {
+  background-color: var(--primary-900) !important;
+  border-color: var(--primary-700) !important;
+}
+
+.dark .border.border-primary-300.rounded.bg-white.overflow-hidden button:hover {
+  background-color: var(--primary-800) !important;
+}
+
+.dark .border.border-primary-300.rounded.bg-white.overflow-hidden button {
+  background-color: var(--primary-900) !important;
+  color: var(--neutral-200) !important;
+}
+
+/* Ensure all settings containers have dark backgrounds in dark mode */
+.dark div[class*="border border-primary-300 rounded bg-white"] {
+  background-color: var(--primary-900) !important;
+  border-color: var(--primary-700) !important;
+}
+
+/* Dark mode for settings component headers */
+.dark .text-2xl.font-semibold.text-primary-800 {
+  color: var(--neutral-100) !important;
+}
+
+/* Dark mode for chevron icons in settings */
+.dark .text-primary-600 {
+  color: var(--neutral-400) !important;
+}
+
+/* Leaflet popup size constraints and scrolling for large attribute tables */
+.leaflet-popup-content {
+  max-height: 50vh;   /* 50% of viewport height */
+  max-width: 30vw;    /* 30% of viewport width */
+  min-width: 200px;   /* Ensure minimum readable width */
+  overflow-y: auto;   /* Vertical scrollbar when content exceeds max-height */
+  overflow-x: auto;   /* Horizontal scrollbar when content exceeds max-width */
+  word-wrap: break-word;
+  word-break: break-word;
+}
+
+/* Ensure the popup content wrapper doesn't add extra whitespace */
+.leaflet-popup-content-wrapper {
+  max-width: 30vw;
+  min-width: 200px;
+}
+
+/* Style the scrollbar for better UX in popups */
+.leaflet-popup-content::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.leaflet-popup-content::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+.leaflet-popup-content::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+.leaflet-popup-content::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Dark mode scrollbar styling */
+.dark .leaflet-popup-content::-webkit-scrollbar-track {
+  background: #2d2d2d;
+}
+
+.dark .leaflet-popup-content::-webkit-scrollbar-thumb {
+  background: #666;
+}
+
+.dark .leaflet-popup-content::-webkit-scrollbar-thumb:hover {
+  background: #888;
+}
+
+/* End of chat message classes */
+
+/* ============================================================================
+   TOOL PROGRESS INDICATOR - Streaming UI
+   ============================================================================ */
+
+.tool-progress-container {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: var(--color-background-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-size: 13px;
+  animation: slideInFromTop 0.3s ease-out;
+}
+
+.tool-progress-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tool-progress-title {
+  font-weight: 600;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tool-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tool-progress-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.tool-progress-item.tool-progress-running {
+  background: rgba(114, 137, 218, 0.1);
+  border-left: 3px solid var(--color-info);
+}
+
+.tool-progress-item.tool-progress-complete {
+  background: rgba(67, 181, 129, 0.1);
+  border-left: 3px solid var(--color-success);
+  animation: successPulse 0.4s ease-out;
+}
+
+.tool-progress-item.tool-progress-error {
+  background: rgba(240, 71, 71, 0.1);
+  border-left: 3px solid var(--color-error);
+}
+
+.tool-progress-icon {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tool-spinner {
+  width: 18px;
+  height: 18px;
+  color: var(--color-info);
+}
+
+.tool-check {
+  width: 18px;
+  height: 18px;
+  color: var(--color-success);
+  animation: scaleIn 0.3s ease-out;
+}
+
+.tool-error {
+  width: 18px;
+  height: 18px;
+  color: var(--color-error);
+}
+
+.tool-progress-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tool-progress-name {
+  font-weight: 500;
+  color: var(--color-text-primary);
+  line-height: 1.3;
+}
+
+.tool-progress-params {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  line-height: 1.3;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  margin-top: 2px;
+  word-break: break-word;
+}
+
+.tool-progress-error {
+  font-size: 11px;
+  color: var(--color-error);
+  line-height: 1.3;
+}
+
+/* Animations */
+@keyframes slideInFromTop {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes successPulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.02);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Streaming message indicator */
+.streaming-message {
+  position: relative;
+  padding-right: 24px;
+}
+
+.streaming-message::after {
+  content: "▋";
+  position: absolute;
+  right: 4px;
+  animation: blink 1s infinite;
+  color: var(--color-text-primary);
+}
+
+@keyframes blink {
+  0%, 50% {
+    opacity: 1;
+  }
+  51%, 100% {
+    opacity: 0;
+  }
+}
+
+/* End of tool progress indicator */
+
+/* ============================================================================
+   EXECUTION PLAN DISPLAY - Multi-step planning UI
+   ============================================================================ */
+
+.plan-display-container {
+  margin-bottom: 12px;
+  background: var(--color-background-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  font-size: 13px;
+  animation: slideInFromTop 0.3s ease-out;
+  overflow: hidden;
+}
+
+.plan-display-header {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-border);
+  background: linear-gradient(135deg, rgba(114, 137, 218, 0.08) 0%, rgba(67, 181, 129, 0.06) 100%);
+}
+
+.plan-display-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.plan-display-label {
+  font-weight: 600;
+  color: var(--color-text-primary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.plan-display-progress-text {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+.plan-display-goal {
+  font-size: 13px;
+  color: var(--color-text-primary);
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+
+.plan-display-progress-bar {
+  height: 3px;
+  background: rgba(114, 137, 218, 0.15);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.plan-display-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-info) 0%, var(--color-success) 100%);
+  border-radius: 2px;
+  transition: width 0.5s ease-out;
+}
+
+.plan-display-steps {
+  padding: 8px 14px 10px;
+}
+
+.plan-step-item {
+  display: flex;
+  gap: 10px;
+  min-height: 40px;
+}
+
+.plan-step-indicator-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 22px;
+  flex-shrink: 0;
+}
+
+.plan-step-icon {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.plan-step-connector {
+  width: 2px;
+  flex: 1;
+  min-height: 8px;
+  background: var(--color-border);
+  margin: 2px 0;
+  transition: background 0.3s ease;
+}
+
+.plan-step-complete .plan-step-connector {
+  background: var(--color-success);
+}
+
+.plan-step-in-progress .plan-step-connector {
+  background: linear-gradient(to bottom, var(--color-info), var(--color-border));
+}
+
+.plan-step-content {
+  flex: 1;
+  padding-bottom: 10px;
+  min-width: 0;
+}
+
+.plan-step-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 22px;
+}
+
+.plan-step-number {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.plan-step-title-text {
+  font-weight: 500;
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.plan-step-pending .plan-step-title-text {
+  color: var(--color-text-secondary);
+}
+
+.plan-step-complete .plan-step-title-text {
+  color: var(--color-success);
+}
+
+.plan-step-in-progress .plan-step-title-text {
+  color: var(--color-info);
+}
+
+.plan-step-error .plan-step-title-text {
+  color: var(--color-error);
+}
+
+.plan-step-description {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+.plan-step-result {
+  font-size: 11px;
+  color: var(--color-success);
+  line-height: 1.3;
+  margin-top: 3px;
+  font-style: italic;
+}
+
+/* Plan step icons */
+.plan-icon-pending {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.plan-icon-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-border);
+  border: 2px solid var(--color-text-secondary);
+  opacity: 0.5;
+}
+
+.plan-icon-spinner {
+  width: 20px;
+  height: 20px;
+  color: var(--color-info);
+}
+
+.plan-icon-check {
+  width: 20px;
+  height: 20px;
+  color: var(--color-success);
+  animation: scaleIn 0.3s ease-out;
+}
+
+.plan-icon-skipped {
+  width: 20px;
+  height: 20px;
+  color: var(--color-text-secondary);
+  opacity: 0.6;
+}
+
+.plan-icon-error {
+  width: 20px;
+  height: 20px;
+  color: var(--color-error);
+}
+
+/* Plan step collapsible tool details */
+.plan-step-tools {
+  margin-top: 6px;
+}
+
+.plan-step-tools-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.plan-step-tools-toggle:hover {
+  background: rgba(114, 137, 218, 0.1);
+  color: var(--color-text-primary);
+}
+
+.plan-step-tools-chevron {
+  display: inline-block;
+  font-size: 10px;
+  transition: transform 0.2s ease;
+}
+
+.plan-step-tools-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.plan-step-tools-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+  padding-left: 4px;
+  border-left: 2px solid var(--color-border);
+  animation: slideInFromTop 0.2s ease-out;
+}
+
+.plan-step-tool-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.plan-step-tool-item.plan-step-tool-running {
+  background: rgba(114, 137, 218, 0.08);
+}
+
+.plan-step-tool-item.plan-step-tool-complete {
+  background: rgba(67, 181, 129, 0.06);
+}
+
+.plan-step-tool-item.plan-step-tool-error {
+  background: rgba(240, 71, 71, 0.08);
+}
+
+.plan-step-tool-icon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.plan-step-tool-icon .tool-spinner {
+  width: 14px;
+  height: 14px;
+}
+
+.plan-step-tool-icon .tool-check {
+  width: 14px;
+  height: 14px;
+}
+
+.plan-step-tool-icon .tool-error {
+  width: 14px;
+  height: 14px;
+}
+
+.plan-step-tool-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.plan-step-tool-name {
+  font-weight: 500;
+  color: var(--color-text-primary);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.plan-step-tool-params {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.plan-step-tool-error-msg {
+  font-size: 10px;
+  color: var(--color-error);
+  line-height: 1.3;
+}
+
+/* End of execution plan display */
+
+/* ============================================================================
+   CUSTOM MARKER ICONS - For AIS/OpenSky/Flight tracking data
+   ============================================================================ */
+
+/* Custom marker icons for AIS/OpenSky data with marker-symbol support */
+.custom-marker-icon {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.custom-marker-icon svg {
+  filter: drop-shadow(1px 1px 2px rgba(0, 0, 0, 0.3));
+  transition: transform 0.15s ease-out;
+  display: block;
+}
+
+.custom-marker-icon:hover svg {
+  transform: scale(1.2);
+  filter: drop-shadow(2px 2px 4px rgba(0, 0, 0, 0.4));
+}
+
+/* Override Leaflet's default divIcon styles */
+.leaflet-div-icon.custom-marker-icon {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* End of custom marker icons */
+
+/* ============================================================================
+   GEOPILOT WORKSPACE — light hydrographic chart system
+   ============================================================================ */
+
+:root {
+  --primary-50: #f7faf9;
+  --primary-100: #edf4f2;
+  --primary-200: #dce9e5;
+  --primary-300: #bfd6d0;
+  --primary-400: #91b8af;
+  --primary-500: #668f87;
+  --primary-600: #4a736c;
+  --primary-700: #315b55;
+  --primary-800: #244842;
+  --primary-900: #17342f;
+  --primary-950: #0e2420;
+
+  --second-primary-50: #eff8f6;
+  --second-primary-100: #d9efea;
+  --second-primary-200: #b7dfd7;
+  --second-primary-300: #87c7bc;
+  --second-primary-400: #54aa9d;
+  --second-primary-500: #348e82;
+  --second-primary-600: #28766d;
+  --second-primary-700: #225f59;
+  --second-primary-800: #1e4d49;
+  --second-primary-900: #1b403d;
+  --second-primary-950: #0b2524;
+
+  --secondary-50: #eff8f6;
+  --secondary-100: #d9efea;
+  --secondary-200: #b7dfd7;
+  --secondary-300: #87c7bc;
+  --secondary-400: #54aa9d;
+  --secondary-500: #348e82;
+  --secondary-600: #28766d;
+  --secondary-700: #225f59;
+  --secondary-800: #1e4d49;
+  --secondary-900: #1b403d;
+  --secondary-950: #0b2524;
+
+  --geopilot-paper: #f8fbfa;
+  --geopilot-panel: #f1f7f5;
+  --geopilot-white: #ffffff;
+  --geopilot-ink: #17342f;
+  --geopilot-muted: #668078;
+  --geopilot-rule: #d4e3df;
+  --geopilot-rule-strong: #b9d1cb;
+  --geopilot-pine: #28766d;
+  --geopilot-pine-dark: #1e5c55;
+  --geopilot-coral: #df6b4f;
+  --geopilot-coral-soft: #fbece7;
+  --geopilot-blue: #4c8698;
+  --geopilot-shadow: 0 12px 32px rgba(35, 76, 69, 0.12);
+}
+
+* {
+  scrollbar-color: #adc9c2 transparent;
+  scrollbar-width: thin;
+}
+
+::selection {
+  background: #b7dfd7;
+  color: #17342f;
+}
+
+body {
+  margin: 0;
+  background: var(--geopilot-paper);
+  color: var(--geopilot-ink);
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  outline-color: var(--geopilot-pine);
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--geopilot-pine);
+  outline-offset: 2px;
+}
+
+.geopilot-shell {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--geopilot-paper);
+}
+
+.workspace-header {
+  z-index: 30;
+  display: grid;
+  grid-template-columns: auto minmax(260px, 1fr) auto auto;
+  min-height: 64px;
+  align-items: center;
+  gap: 18px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--geopilot-rule);
+  background: rgba(248, 251, 250, 0.96);
+  box-shadow: 0 6px 24px rgba(35, 76, 69, 0.06);
+}
+
+.brand-lockup,
+.agent-title-row,
+.workspace-readouts,
+.readout,
+.workspace-dock,
+.conversation-controls {
+  display: flex;
+  align-items: center;
+}
+
+.brand-lockup {
+  gap: 11px;
+}
+
+.brand-mark,
+.agent-title-mark {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  color: var(--geopilot-white);
+  background: var(--geopilot-pine);
+  box-shadow: 0 6px 14px rgba(40, 118, 109, 0.2);
+}
+
+.brand-lockup h1,
+.agent-heading h2,
+.panel-heading h2 {
+  margin: 0;
+  color: var(--geopilot-ink);
+  font-weight: 680;
+  letter-spacing: -0.025em;
+}
+
+.brand-lockup h1 {
+  font-size: 1.08rem;
+  line-height: 1.15;
+}
+
+.brand-lockup p,
+.agent-heading p,
+.panel-heading p {
+  margin: 3px 0 0;
+  color: var(--geopilot-muted);
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+.workspace-readouts {
+  gap: 8px;
+}
+
+.workspace-header-nav {
+  min-width: 0;
+  align-self: stretch;
+  align-items: center;
+  justify-content: center;
+}
+
+.workspace-header-nav .project-rail {
+  width: auto;
+  height: auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+}
+
+.workspace-header-nav .project-rail-primary,
+.workspace-header-nav .project-rail-secondary {
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+}
+
+.workspace-header-nav .project-rail-secondary {
+  padding-left: 10px;
+  border-left: 1px solid var(--geopilot-rule);
+}
+
+.workspace-header-nav .rail-action {
+  min-height: 38px;
+  flex-direction: row;
+  gap: 7px;
+  padding: 0 12px;
+  font-size: 0.72rem;
+}
+
+.readout {
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--geopilot-rule);
+  border-radius: 999px;
+  color: #48655f;
+  background: #f1f7f5;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.readout.is-live {
+  border-color: #edb6a7;
+  color: #9a402c;
+  background: var(--geopilot-coral-soft);
+}
+
+.workspace-frame {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  padding: 12px;
+  background: #e8f0ed;
+}
+
+.workspace-rail,
+.workspace-panel,
+.map-stage {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--geopilot-rule);
+  border-radius: 14px;
+  background: var(--geopilot-white);
+}
+
+.workspace-rail {
+  flex: none;
+  min-width: 66px;
+  max-width: 82px;
+  background: var(--geopilot-panel);
+}
+
+.workspace-panel {
+  position: absolute;
+  z-index: 900;
+  top: 24px;
+  bottom: 24px;
+  width: clamp(300px, 23vw, 380px);
+  min-width: 0;
+  box-shadow: 0 18px 44px rgba(27, 66, 59, 0.18);
+  backdrop-filter: blur(12px);
+}
+
+.map-stage {
+  position: absolute;
+  inset: 12px;
+  box-shadow: var(--geopilot-shadow);
+}
+
+.layer-panel {
+  left: 24px;
+}
+
+.agent-panel {
+  right: 24px;
+  width: clamp(340px, 27vw, 440px);
+}
+
+.map-stage > .map-surface,
+.map-stage .leaflet-container {
+  width: 100%;
+  height: 100%;
+}
+
+.resize-handle {
+  position: absolute;
+  z-index: 40;
+  top: 0;
+  right: -5px;
+  bottom: 0;
+  width: 10px;
+  cursor: ew-resize;
+}
+
+.resize-handle::after {
+  position: absolute;
+  top: 42%;
+  left: 4px;
+  width: 2px;
+  height: 34px;
+  border-radius: 2px;
+  background: transparent;
+  content: "";
+  transition: background 180ms ease-out;
+}
+
+.resize-handle:hover::after {
+  background: var(--geopilot-pine);
+}
+
+.resize-handle-right {
+  right: -9px;
+}
+
+.panel-collapse,
+.mobile-menu-button,
+.mobile-menu-heading button,
+.icon-button {
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--geopilot-rule);
+  color: #48655f;
+  background: var(--geopilot-white);
+  transition: color 180ms ease-out, background 180ms ease-out, border-color 180ms ease-out;
+}
+
+.panel-collapse {
+  position: absolute;
+  z-index: 20;
+  top: 15px;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+}
+
+.panel-collapse:hover,
+.mobile-menu-button:hover,
+.icon-button:hover {
+  border-color: var(--geopilot-rule-strong);
+  color: var(--geopilot-pine-dark);
+  background: var(--geopilot-panel);
+}
+
+.panel-collapse-right {
+  right: 12px;
+}
+
+.panel-collapse-left {
+  left: 12px;
+}
+
+.project-rail {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 10px 8px;
+}
+
+.project-rail-primary,
+.project-rail-secondary {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.rail-action {
+  display: flex;
+  min-height: 48px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 11px;
+  color: #5f7b75;
+  background: transparent;
+  font-size: 0.62rem;
+  font-weight: 590;
+  text-decoration: none;
+  transition: color 180ms ease-out, background 180ms ease-out;
+}
+
+.rail-action:hover {
+  color: var(--geopilot-pine-dark);
+  background: #e3efec;
+}
+
+.rail-action.is-current {
+  color: var(--geopilot-pine-dark);
+  background: #d9ebe7;
+}
+
+.layer-ledger,
+.agent-worklog {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--geopilot-white);
+}
+
+.layer-ledger {
+  overflow-y: auto;
+  padding: 16px 14px 18px;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 36px 14px 2px;
+  border-bottom: 1px solid var(--geopilot-rule);
+}
+
+.panel-heading h2,
+.agent-heading h2 {
+  font-size: 0.98rem;
+}
+
+.panel-count {
+  display: grid;
+  min-width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--geopilot-pine-dark);
+  background: #dceee9;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-section {
+  padding: 16px 2px;
+  border-bottom: 1px solid var(--geopilot-rule);
+}
+
+.ledger-section:last-child {
+  border-bottom: 0;
+}
+
+.ledger-section h3 {
+  margin: 0 0 9px;
+  color: #315b55;
+  font-size: 0.72rem;
+  font-weight: 680;
+}
+
+.ledger-section .mb-4,
+.ledger-section .my-4 {
+  margin-bottom: 0;
+}
+
+.workspace-control {
+  height: 34px;
+  border: 1px solid var(--geopilot-rule-strong);
+  border-radius: 9px;
+  padding: 0 10px;
+  color: var(--geopilot-ink);
+  background: var(--geopilot-white);
+  font-size: 0.76rem;
+}
+
+.workspace-button {
+  min-height: 34px;
+  border-radius: 9px;
+  padding: 0 11px;
+  font-size: 0.72rem;
+  font-weight: 650;
+  transition: background 180ms ease-out, border-color 180ms ease-out;
+}
+
+.workspace-button-primary {
+  border: 1px solid var(--geopilot-pine);
+  color: white;
+  background: var(--geopilot-pine);
+}
+
+.workspace-button-primary:hover {
+  background: var(--geopilot-pine-dark);
+}
+
+.workspace-button-secondary {
+  border: 1px solid var(--geopilot-rule-strong);
+  color: #315b55;
+  background: white;
+}
+
+.workspace-button-secondary:hover {
+  background: var(--geopilot-panel);
+}
+
+.workspace-button:disabled,
+.icon-button:disabled,
+.composer-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.status-copy {
+  margin: 8px 0 0;
+  color: var(--geopilot-pine);
+  font-size: 0.7rem;
+}
+
+.agent-heading {
+  flex: 0 0 auto;
+  padding: 14px 14px 12px 48px;
+  border-bottom: 1px solid var(--geopilot-rule);
+  background: var(--geopilot-paper);
+}
+
+.agent-title-row {
+  gap: 9px;
+  margin-bottom: 12px;
+}
+
+.agent-title-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  color: var(--geopilot-pine);
+  background: #dceee9;
+  box-shadow: none;
+}
+
+.conversation-controls {
+  gap: 6px;
+}
+
+.icon-button {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+}
+
+.icon-button-danger {
+  color: #ad4b36;
+}
+
+.icon-button-danger:hover {
+  border-color: #efc1b5;
+  color: #943e2c;
+  background: var(--geopilot-coral-soft);
+}
+
+.agent-transcript {
+  min-height: 0;
+  flex: 1;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 14px;
+  background: #fbfdfc;
+}
+
+.agent-composer {
+  flex: 0 0 auto;
+  padding: 11px 12px 13px;
+  border-top: 1px solid var(--geopilot-rule);
+  background: var(--geopilot-paper);
+}
+
+.chat-composer-form {
+  position: relative;
+}
+
+.chat-composer-input {
+  display: block;
+  width: 100%;
+  min-height: 56px;
+  max-height: 200px;
+  resize: none;
+  overflow: hidden;
+  border: 1px solid var(--geopilot-rule-strong);
+  border-radius: 13px;
+  padding: 13px 48px 13px 13px;
+  color: var(--geopilot-ink);
+  background: white;
+  box-shadow: 0 5px 16px rgba(35, 76, 69, 0.07);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.chat-composer-input::placeholder {
+  color: #718b84;
+}
+
+.chat-composer-input:focus {
+  border-color: var(--geopilot-pine);
+  box-shadow: 0 0 0 3px rgba(40, 118, 109, 0.11);
+}
+
+.composer-action {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 10px;
+  color: white;
+  transition: background 180ms ease-out, transform 180ms ease-out;
+}
+
+.composer-action:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+.composer-action-send {
+  background: var(--geopilot-pine);
+}
+
+.composer-action-send:hover {
+  background: var(--geopilot-pine-dark);
+}
+
+.composer-action-cancel {
+  color: #9c3e2b;
+  background: #f5c9be;
+}
+
+.workspace-dock {
+  position: absolute;
+  z-index: 950;
+  left: 50%;
+  bottom: 26px;
+  gap: 7px;
+  transform: translateX(-50%);
+}
+
+.workspace-dock button {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--geopilot-rule-strong);
+  border-radius: 12px;
+  padding: 0 13px;
+  color: #315b55;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--geopilot-shadow);
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+
+.workspace-dock button:hover {
+  color: var(--geopilot-pine-dark);
+  background: #edf6f3;
+}
+
+.mobile-menu-button {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+}
+
+.mobile-menu-scrim {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  background: rgba(23, 52, 47, 0.24);
+}
+
+.mobile-menu-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(86vw, 340px);
+  background: var(--geopilot-white);
+  box-shadow: -16px 0 40px rgba(35, 76, 69, 0.16);
+}
+
+.mobile-menu-heading {
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--geopilot-rule);
+}
+
+.mobile-menu-heading div {
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-menu-heading strong {
+  font-size: 0.9rem;
+}
+
+.mobile-menu-heading span {
+  color: var(--geopilot-muted);
+  font-size: 0.7rem;
+}
+
+.mobile-menu-heading button {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+}
+
+.mobile-menu-panel .project-rail {
+  height: calc(100% - 68px);
+  padding: 14px;
+}
+
+.mobile-menu-panel .rail-action {
+  min-height: 44px;
+  flex-direction: row;
+  justify-content: flex-start;
+  padding: 0 12px;
+  font-size: 0.78rem;
+}
+
+.leaflet-bar a,
+.leaflet-control-layers {
+  border-color: var(--geopilot-rule-strong) !important;
+  color: var(--geopilot-ink) !important;
+  background: rgba(255, 255, 255, 0.96) !important;
+}
+
+@media (max-width: 899px) {
+  .workspace-header {
+    display: flex;
+    min-height: 58px;
+    padding: 0 12px;
+  }
+
+  .brand-lockup p,
+  .workspace-readouts {
+    display: none;
+  }
+
+  .workspace-frame {
+    padding: 6px;
+  }
+
+  .workspace-panel {
+    position: absolute;
+    z-index: 650;
+    top: 6px;
+    right: 6px;
+    bottom: 6px;
+    left: 6px;
+    width: auto !important;
+  }
+
+  .agent-panel,
+  .layer-panel {
+    width: auto;
+  }
+
+  .workspace-dock {
+    left: 50%;
+    bottom: 14px;
+  }
+}
+
+@media (min-width: 900px) and (max-width: 1179px) {
+  .workspace-header {
+    grid-template-columns: auto 1fr auto;
+  }
+
+  .workspace-header-nav .rail-action {
+    padding: 0 9px;
+  }
+
+  .workspace-readouts {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

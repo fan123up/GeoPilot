@@ -1,0 +1,14 @@
+
+FROM nginx:alpine
+
+COPY nginx.conf.envsubst /etc/nginx/nginx.conf.envsubst
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
+
+# Copy loading page
+COPY loading.html /usr/share/nginx/html/loading.html
+
+EXPOSE 80
+
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["nginx", "-g", "daemon off;"]
